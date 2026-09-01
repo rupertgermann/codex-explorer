@@ -6,8 +6,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, normalize, relative, resolve, sep } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { atomicMemoryWrite, memoryHash, MemoryConflictError, MemoryRepository, resolveMemoryMarkdownPath } from "./memory.ts";
+import { codexSessionsRoot, SessionRepository } from "./sessions.ts";
 
 export type ForgetSectionKind = "summary" | "durable" | "raw" | "rollout" | "ad-hoc";
 
@@ -49,6 +52,32 @@ export type ForgetResult = {
   tombstonePath: string;
   verification: "suppressed";
 };
+
+export type ProjectForgetDatabaseRow = {
+  threadId: string;
+  rolloutSlug: string;
+  selectedForPhase2: boolean;
+};
+
+export type ProjectForgetPlan = {
+  directory: string;
+  knownDirectories: string[];
+  actionable: boolean;
+  reason: string | null;
+  scopes: string[];
+  sections: ForgetSection[];
+  sharedSections: ForgetSection[];
+  databaseRows: ProjectForgetDatabaseRow[];
+  sessionCount: number;
+};
+
+type ProjectForgetSources = {
+  activeSessionsRoot?: string;
+  archivedSessionsRoot?: string;
+  databasePath?: string;
+};
+
+type ScopedTaskGroup = { directory: string; section: ForgetSection };
 
 const ALLOWED_ROOT_FILES = new Map<string, ForgetSectionKind>([
   ["memory_summary.md", "summary"],
@@ -215,13 +244,120 @@ function withoutRanges(content: string, sections: ForgetSection[]) {
     .reduce((next, section) => next.slice(0, section.startOffset) + next.slice(section.endOffset), content);
 }
 
+function absoluteDirectory(input: string) {
+  const value = input.trim();
+  return isAbsolute(value) ? normalize(value) : null;
+}
+
+function isWithin(directory: string, candidate: string) {
+  const path = relative(directory, candidate);
+  return path === "" || path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
+
+function scopedTaskGroups(content: string): ScopedTaskGroup[] {
+  const starts = [...content.matchAll(/^# Task Group:.*$/gm)];
+  return starts.flatMap((start, index) => {
+    const startOffset = start.index ?? 0;
+    const endOffset = starts[index + 1]?.index ?? content.length;
+    const sectionContent = content.slice(startOffset, endOffset);
+    const directory = absoluteDirectory(sectionContent.match(/^applies_to:\s*cwd=([^;\r\n]+)/m)?.[1] ?? "");
+    if (!directory) return [];
+    return [{
+      directory,
+      section: rangeSection("MEMORY.md", "durable", content, startOffset, endOffset, "exact", [`project scope ${directory}`]),
+    }];
+  });
+}
+
+function memoryBullets(content: string) {
+  const headings = [...content.matchAll(/^#{2,6}\s+(.+)$/gm)];
+  return bulletSections("MEMORY.md", "durable", content).filter((section) => {
+    const heading = headings.findLast((candidate) => (candidate.index ?? 0) < section.startOffset)?.[1].trim().toLocaleLowerCase();
+    return heading !== "rollout_summary_files" && heading !== "keywords";
+  });
+}
+
+function projectSummarySections(content: string, directory: string) {
+  const headings = [...content.matchAll(/^(#{1,6})\s+(.+)$/gm)];
+  const ranges = headings.flatMap((heading, index) => {
+    const project = absoluteDirectory(heading[2].trim().replace(/^`|`$/g, ""));
+    if (!project || !isWithin(directory, project)) return [];
+    const level = heading[1].length;
+    const endOffset = headings.slice(index + 1).find((candidate) => candidate[1].length <= level)?.index ?? content.length;
+    return [{ startOffset: heading.index ?? 0, endOffset }];
+  });
+  return bulletSections("memory_summary.md", "summary", content)
+    .filter((section) => ranges.some((range) => section.startOffset >= range.startOffset && section.endOffset <= range.endOffset));
+}
+
+function rawThreadSections(content: string, threadIds: Set<string>) {
+  const threads = [...content.matchAll(/^## Thread `([^`]+)`/gm)];
+  return threads.flatMap((thread, index) => threadIds.has(thread[1])
+    ? [rangeSection("raw_memories.md", "raw", content, thread.index ?? 0, threads[index + 1]?.index ?? content.length, "exact", [`thread id ${thread[1]}`])]
+    : []);
+}
+
+function provenance(content: string) {
+  return {
+    rolloutPaths: new Set([...content.matchAll(/rollout_summaries\/[^\s)]+\.md/g)].map((match) => match[0])),
+    threadIds: new Set([
+      ...[...content.matchAll(/(?:thread|session|rollout)_id\s*[:=]\s*([a-z0-9_-]+)/gi)].map((match) => match[1]),
+      ...[...content.matchAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi)].map((match) => match[0]),
+    ]),
+  };
+}
+
+function uniqueSections(sections: ForgetSection[]) {
+  const kindOrder: ForgetSectionKind[] = ["summary", "durable", "raw", "rollout", "ad-hoc"];
+  const unique = sections.filter((section, index, all) => all.findIndex(({ id }) => id === section.id) === index);
+  return unique
+    .filter((section, index) => !unique.some((candidate, candidateIndex) => candidateIndex !== index
+      && candidate.path === section.path
+      && candidate.startOffset <= section.startOffset
+      && candidate.endOffset >= section.endOffset
+      && (candidate.startOffset < section.startOffset || candidate.endOffset > section.endOffset)))
+    .sort((left, right) => kindOrder.indexOf(left.kind) - kindOrder.indexOf(right.kind) || left.path.localeCompare(right.path) || left.startOffset - right.startOffset);
+}
+
+function stage1Rows(path: string) {
+  if (!existsSync(path)) return { rows: [] as ProjectForgetDatabaseRow[], error: null as string | null };
+  let database: DatabaseSync | null = null;
+  try {
+    database = new DatabaseSync(path, { readOnly: true });
+    const rows = database.prepare("SELECT thread_id, rollout_slug, selected_for_phase2 FROM stage1_outputs ORDER BY thread_id").all() as Array<{
+      thread_id: string;
+      rollout_slug: string | null;
+      selected_for_phase2: number | bigint;
+    }>;
+    return {
+      rows: rows.map((row) => ({
+        threadId: row.thread_id,
+        rolloutSlug: row.rollout_slug ?? "",
+        selectedForPhase2: Number(row.selected_for_phase2) !== 0,
+      })),
+      error: null,
+    };
+  } catch {
+    return { rows: [] as ProjectForgetDatabaseRow[], error: "The active Memory database does not expose the expected stage1_outputs schema." };
+  } finally {
+    database?.close();
+  }
+}
+
 export class MemoryForgetService {
   readonly root: string;
   readonly backupRoot: string;
+  readonly projectSources: Required<ProjectForgetSources>;
 
-  constructor(root: string, backupRoot = join(dirname(resolve(root)), "memory-forget-backups")) {
+  constructor(root: string, backupRoot = join(dirname(resolve(root)), "memory-forget-backups"), projectSources: ProjectForgetSources = {}) {
     this.root = resolve(root);
     this.backupRoot = resolve(backupRoot);
+    const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+    this.projectSources = {
+      activeSessionsRoot: projectSources.activeSessionsRoot ?? codexSessionsRoot(),
+      archivedSessionsRoot: projectSources.archivedSessionsRoot ?? process.env.CODEX_ARCHIVED_SESSIONS_DIRECTORY ?? join(codexHome, "archived_sessions"),
+      databasePath: projectSources.databasePath ?? join(codexHome, "memories_1.sqlite"),
+    };
     if (this.backupRoot === this.root || this.backupRoot.startsWith(`${this.root}${sep}`)) {
       throw new Error("Forget backups must be stored outside the Memory corpus.");
     }
@@ -265,6 +401,118 @@ export class MemoryForgetService {
       selection,
       durableCandidates,
       sections,
+    };
+  }
+
+  previewProject(input: string): ProjectForgetPlan {
+    const repository = new MemoryRepository(this.root);
+    const durable = repository.read("MEMORY.md");
+    const groups = scopedTaskGroups(durable.content);
+    const sessions = [
+      ...new SessionRepository(this.projectSources.activeSessionsRoot).catalog({ refresh: true }).sessions,
+      ...new SessionRepository(this.projectSources.archivedSessionsRoot).catalog({ refresh: true }).sessions,
+    ];
+    const knownDirectories = [...new Set([
+      ...groups.map(({ directory }) => directory),
+      ...sessions.map(({ cwd }) => absoluteDirectory(cwd)).filter((directory): directory is string => directory !== null),
+    ])].sort();
+    const directory = absoluteDirectory(input);
+    const empty = (reason: string): ProjectForgetPlan => ({
+      directory: directory ?? input.trim(),
+      knownDirectories,
+      actionable: false,
+      reason,
+      scopes: [],
+      sections: [],
+      sharedSections: [],
+      databaseRows: [],
+      sessionCount: 0,
+    });
+    if (!directory) return empty("Enter an absolute project directory.");
+
+    const matchedGroups = groups.filter((group) => isWithin(directory, group.directory));
+    const unmatchedGroups = groups.filter((group) => !isWithin(directory, group.directory));
+    const matchingSessions = sessions.filter((session) => absoluteDirectory(session.cwd) && isWithin(directory, normalize(session.cwd)));
+    const matchedSource = matchedGroups.map(({ section }) => section.content).join("\n");
+    const unmatchedSource = unmatchedGroups.map(({ section }) => section.content).join("\n");
+    const matchedProvenance = provenance(matchedSource);
+    const unmatchedProvenance = provenance(unmatchedSource);
+    const sharedThreadIds = new Set([...matchedProvenance.threadIds].filter((id) => unmatchedProvenance.threadIds.has(id)));
+    const targetThreadIds = new Set([
+      ...matchingSessions.map(({ id }) => id),
+      ...[...matchedProvenance.threadIds].filter((id) => !sharedThreadIds.has(id)),
+    ]);
+    const database = stage1Rows(this.projectSources.databasePath);
+    const databaseRows = database.rows.filter(({ threadId }) => targetThreadIds.has(threadId));
+    const reasons = [
+      database.error,
+      sharedThreadIds.size ? "Some thread provenance is shared with another project." : null,
+      groups.length > 0 && matchedGroups.length === groups.length ? "Project Forget cannot target every project-scoped Task Group." : null,
+    ].filter((reason): reason is string => reason !== null);
+
+    const allDurableMemories = memoryBullets(durable.content);
+    const matchedMemories = allDurableMemories.filter((memory) => matchedGroups.some(({ section }) => memory.startOffset >= section.startOffset && memory.endOffset <= section.endOffset));
+    const unmatchedTargets = new Set(allDurableMemories
+      .filter((memory) => unmatchedGroups.some(({ section }) => memory.startOffset >= section.startOffset && memory.endOffset <= section.endOffset))
+      .map(({ content }) => canonical(content)));
+    const sharedTargets = new Set(matchedMemories.map(({ content }) => canonical(content)).filter((target) => unmatchedTargets.has(target)));
+    const exclusiveTargets = new Set(matchedMemories.map(({ content }) => canonical(content)).filter((target) => !sharedTargets.has(target)));
+    const sharedSections: ForgetSection[] = matchedMemories.filter(({ content }) => sharedTargets.has(canonical(content)));
+    const sections: ForgetSection[] = matchedMemories.filter(({ content }) => exclusiveTargets.has(canonical(content)));
+
+    const files = new Set(repository.catalog().files.map(({ path }) => path));
+    const missingRollout = [...matchedProvenance.rolloutPaths].find((path) => !files.has(path));
+    if (missingRollout) reasons.push(`Referenced Memory source is missing: ${missingRollout}.`);
+    const rolloutReferenceLines = matchedGroups.flatMap(({ section }) => section.content.split(/\r?\n/));
+    const unresolvedRollout = [...matchedProvenance.rolloutPaths]
+      .filter((path) => files.has(path))
+      .find((path) => provenance(`${rolloutReferenceLines.find((line) => line.includes(path)) ?? ""}\n${repository.read(path).content}`).threadIds.size === 0);
+    if (unresolvedRollout) reasons.push(`Project rollout provenance has no matching thread: ${unresolvedRollout}.`);
+    if (files.has("memory_summary.md")) {
+      const summary = repository.read("memory_summary.md").content;
+      const scopedSummaryIds = new Set(projectSummarySections(summary, directory).map(({ id }) => id));
+      for (const memory of bulletSections("memory_summary.md", "summary", summary)) {
+        const target = canonical(memory.content);
+        if (sharedTargets.has(target)) sharedSections.push(memory);
+        else if (exclusiveTargets.has(target) || scopedSummaryIds.has(memory.id)) sections.push(memory);
+      }
+    }
+    if (files.has("raw_memories.md")) {
+      sections.push(...rawThreadSections(repository.read("raw_memories.md").content, targetThreadIds));
+    }
+
+    for (const path of files) {
+      const kind = kindFor(path);
+      if (kind === "rollout") {
+        const content = repository.read(path).content;
+        const threadId = provenance(content).threadIds.values().next().value as string | undefined;
+        const referenced = matchedProvenance.rolloutPaths.has(path) || Boolean(threadId && targetThreadIds.has(threadId));
+        if (!referenced) continue;
+        const section = rangeSection(path, "rollout", content, 0, content.length, "exact", [threadId ? `thread id ${threadId}` : "project rollout reference"]);
+        if (unmatchedProvenance.rolloutPaths.has(path) || Boolean(threadId && sharedThreadIds.has(threadId))) sharedSections.push(section);
+        else sections.push(section);
+      }
+      if (kind === "ad-hoc") {
+        for (const memory of bulletSections(path, "ad-hoc", repository.read(path).content)) {
+          const target = canonical(memory.content);
+          if (exclusiveTargets.has(target)) sections.push(memory);
+          else if (sharedTargets.has(target)) sharedSections.push(memory);
+        }
+      }
+    }
+
+    const affectedSections = uniqueSections(sections);
+    if (affectedSections.length === 0 && databaseRows.length === 0) reasons.push("No project-scoped Memory was found.");
+    return {
+      directory,
+      knownDirectories,
+      actionable: reasons.length === 0,
+      reason: reasons.join(" ") || null,
+      scopes: [...new Set(matchedGroups.map(({ directory: scope }) => scope))].sort(),
+      sections: affectedSections,
+      sharedSections: uniqueSections(sharedSections),
+      databaseRows,
+      sessionCount: matchingSessions.length,
     };
   }
 

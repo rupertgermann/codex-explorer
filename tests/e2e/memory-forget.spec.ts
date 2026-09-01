@@ -47,3 +47,30 @@ test("reaches orphan deletion only through the dedicated advanced workflow", asy
   await expect(dialog.getByText("The confirmed orphan file was deleted.")).toBeVisible();
   await expect(page.getByRole("button", { name: /rollout_summaries\/orphan\.md/ })).toHaveCount(0);
 });
+
+test("previews every project Memory source without exposing Apply", async ({ page }) => {
+  const response = await page.request.post("/api/memory/forget", { data: { action: "project-preview", directory: "/work/alpha" } });
+  expect(response.status()).toBe(200);
+  const preview = await response.json();
+  expect(preview).toMatchObject({
+    actionable: true,
+    scopes: ["/work/alpha"],
+    sessionCount: 1,
+    databaseRows: [{ threadId: "thread-alpha" }],
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Markdown memory" }).click();
+  await page.getByRole("button", { name: "Forget project…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Preview Project Forget" });
+  await dialog.getByLabel("Project directory").fill("/work/alpha");
+  await dialog.getByRole("button", { name: "Preview project" }).click();
+
+  await expect(dialog.getByText("/work/alpha", { exact: true }).first()).toBeVisible();
+  await expect(dialog.getByText("5 affected sections")).toBeVisible();
+  await expect(dialog.getByText("1 active Memory database row")).toBeVisible();
+  await expect(dialog.getByText("thread-alpha · alpha · selected for phase 2", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("1 matching session remains read-only")).toBeVisible();
+  await expect(dialog.getByText("Shared Memories retained")).toBeVisible();
+  await expect(dialog.getByRole("button", { name: /Apply/ })).toHaveCount(0);
+});

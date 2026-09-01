@@ -48,6 +48,10 @@ export async function POST(request: Request) {
     if (!isRecord(body)) throw new Error("A Forget request object is required.");
     const service = new MemoryForgetService(codexMemoryRoot());
 
+    if (body.action === "project-preview") {
+      if (typeof body.directory !== "string") throw new Error("A project directory is required.");
+      return NextResponse.json(service.previewProject(body.directory), { headers: { "Cache-Control": "no-store" } });
+    }
     if (body.action === "preview") {
       if (!isSelection(body.selection)) throw new Error("A valid summary selection is required.");
       return NextResponse.json(service.preview(body.selection), { headers: { "Cache-Control": "no-store" } });
@@ -60,7 +64,7 @@ export async function POST(request: Request) {
       if (!isPlan(body.plan)) throw new Error("A valid Forget plan is required.");
       return NextResponse.json(service.recheck(body.plan), { headers: { "Cache-Control": "no-store" } });
     }
-    throw new Error("action must be preview, apply, or recheck.");
+    throw new Error("action must be project-preview, preview, apply, or recheck.");
   } catch (error) {
     const status = error instanceof MemoryConflictError ? 409 : 400;
     return NextResponse.json(

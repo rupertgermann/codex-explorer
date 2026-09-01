@@ -9,6 +9,7 @@ import {
   Eye,
   FileText,
   Folder,
+  FolderX,
   Hash,
   Loader2,
   Pencil,
@@ -23,10 +24,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { MemoryForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
+import { MemoryForgetDialog, ProjectForgetDialog, type ForgetRecheck } from "@/components/memory-forget-dialog";
 import { MemoryOrphanDialog } from "@/components/memory-orphan-dialog";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
-import type { ForgetPlan, ForgetResult } from "@/lib/memory-forget";
+import type { ForgetPlan, ForgetResult, ProjectForgetPlan } from "@/lib/memory-forget";
 import type { OrphanPlan, OrphanResult } from "@/lib/memory-orphan";
 import { isAggregateMemoryPath } from "@/lib/memory-policy";
 import ReactMarkdown from "react-markdown";
@@ -122,6 +123,11 @@ export function MemoryWorkspace() {
   const [forgetLoading, setForgetLoading] = useState(false);
   const [forgetError, setForgetError] = useState<string | null>(null);
   const [confirmedDurableIds, setConfirmedDurableIds] = useState<string[]>([]);
+  const [projectForgetOpen, setProjectForgetOpen] = useState(false);
+  const [projectForgetDirectory, setProjectForgetDirectory] = useState("");
+  const [projectForgetPlan, setProjectForgetPlan] = useState<ProjectForgetPlan | null>(null);
+  const [projectForgetLoading, setProjectForgetLoading] = useState(false);
+  const [projectForgetError, setProjectForgetError] = useState<string | null>(null);
   const [orphanOpen, setOrphanOpen] = useState(false);
   const [orphanPlan, setOrphanPlan] = useState<OrphanPlan | null>(null);
   const [orphanResult, setOrphanResult] = useState<OrphanResult | null>(null);
@@ -256,6 +262,21 @@ export function MemoryWorkspace() {
     } finally { setForgetLoading(false); }
   }
 
+  async function previewProjectForget(directory = projectForgetDirectory) {
+    if (dirty) return;
+    setProjectForgetLoading(true); setProjectForgetError(null);
+    try {
+      const plan = await memoryRequest<ProjectForgetPlan>("/api/memory/forget", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "project-preview", directory }),
+      });
+      setProjectForgetPlan(plan);
+    } catch (error) {
+      setProjectForgetError(error instanceof Error ? error.message : "Could not preview this project Forget plan.");
+    } finally { setProjectForgetLoading(false); }
+  }
+
   async function inspectOrphan() {
     if (!document || isAggregateMemoryPath(document.path) || dirty) return;
     setOrphanOpen(true); setOrphanLoading(true); setOrphanError(null); setOrphanPlan(null); setOrphanResult(null);
@@ -305,7 +326,7 @@ export function MemoryWorkspace() {
     <div className="space-y-5">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge className="border-cyan-200 bg-cyan-50 text-cyan-700"><Brain className="size-3" />Markdown corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Memory</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Search and analyze the complete Markdown corpus, then edit files with revision-checked atomic saves.</p></div>
-        <Button variant="outline" size="sm" className="shrink-0 self-start" onClick={loadCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh analysis</Button>
+        <div className="flex shrink-0 gap-2 self-start"><Button variant="outline" size="sm" onClick={() => { setProjectForgetOpen(true); setProjectForgetError(null); if (!projectForgetPlan) void previewProjectForget(""); }} disabled={dirty} title={dirty ? "Save or discard editor changes before previewing Project Forget." : undefined}><FolderX className="size-3.5" />Forget project…</Button><Button variant="outline" size="sm" onClick={loadCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh analysis</Button></div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -349,6 +370,16 @@ export function MemoryWorkspace() {
         onRefresh={() => { if (forgetPlan) void previewForget(forgetPlan.selection.summaryLine, confirmedDurableIds); }}
         onApply={() => { void applyForget(); }}
         onRecheck={() => { void recheckForget(); }}
+      />
+      <ProjectForgetDialog
+        open={projectForgetOpen}
+        loading={projectForgetLoading}
+        error={projectForgetError}
+        directory={projectForgetDirectory}
+        plan={projectForgetPlan}
+        onDirectoryChange={setProjectForgetDirectory}
+        onOpenChange={setProjectForgetOpen}
+        onPreview={() => { void previewProjectForget(); }}
       />
       <MemoryOrphanDialog
         key={orphanPlan?.expectedHash ?? "empty-orphan-plan"}

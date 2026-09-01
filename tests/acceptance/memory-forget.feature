@@ -30,3 +30,33 @@ Feature: Control generated Codex Memories
     And I apply the Forget plan
     And the positive Memory resurfaces in a later rollout
     Then the manual recheck reports the later rollout
+
+  Scenario: Preview one project without changing any source
+    Given a disposable Memory corpus with project-scoped sources
+    When I preview Memory for "/work/alpha"
+    Then the Project Forget plan is actionable
+    And the preview lists only the project sources and retains shared Memory
+    And the project preview has not changed the corpus, Memory database, or sessions
+
+  Scenario Outline: Reject unsafe Project Forget targets
+    Given a disposable Memory corpus with project-scoped sources
+    When I preview Memory for "<directory>"
+    Then the Project Forget plan is blocked by "<reason>"
+
+    Examples:
+      | directory     | reason                                           |
+      | work/alpha    | Enter an absolute project directory.             |
+      | /work         | cannot target every project-scoped Task Group.   |
+      | /work/missing | No project-scoped Memory was found.               |
+
+  Scenario: Block unresolved project provenance
+    Given a disposable Memory corpus with project-scoped sources
+    And one referenced project source is missing
+    When I preview Memory for "/work/alpha"
+    Then the Project Forget plan is blocked by "Referenced Memory source is missing"
+
+  Scenario: Block one unresolved project rollout among resolved provenance
+    Given a disposable Memory corpus with project-scoped sources
+    And one project rollout has no thread provenance
+    When I preview Memory for "/work/alpha"
+    Then the Project Forget plan is blocked by "Project rollout provenance has no matching thread"
