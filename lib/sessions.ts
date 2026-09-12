@@ -198,10 +198,10 @@ function completeUtf8PrefixLength(buffer: Buffer, bytes: number) {
   return bytes - sequenceStart < expected ? sequenceStart : bytes;
 }
 
-async function scanJsonl(
+export async function scanJsonl(
   path: string,
   byteLimit: number,
-  visit: (record: JsonRecord) => void,
+  visit: (record: JsonRecord, line: number) => void,
   options: { signal?: AbortSignal; onProgress?: (scannedBytes: number, totalBytes: number) => void } = {},
 ) {
   const fileSize = statSync(path).size;
@@ -213,6 +213,7 @@ async function scanJsonl(
   let oversizedRecords = 0;
   let invalidRecords = 0;
   let lastProgress = 0;
+  let line = 0;
 
   const append = (fragment: Buffer) => {
     if (oversized || fragment.length === 0) return;
@@ -227,11 +228,12 @@ async function scanJsonl(
   };
 
   const finishLine = () => {
+    line += 1;
     if (oversized) {
       oversizedRecords += 1;
     } else if (lineBytes > 0) {
       try {
-        visit(JSON.parse(Buffer.concat(fragments, lineBytes).toString("utf8")) as JsonRecord);
+        visit(JSON.parse(Buffer.concat(fragments, lineBytes).toString("utf8")) as JsonRecord, line);
       } catch {
         invalidRecords += 1;
       }
