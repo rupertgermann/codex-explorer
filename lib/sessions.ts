@@ -166,7 +166,7 @@ function summary(root: string, path: string): SessionSummary {
   const absolutePath = join(root, path);
   const file = statSync(absolutePath);
   const record = firstRecord(absolutePath);
-  const payload = object(record?.payload);
+  const payload = record?.type === "session_meta" ? object(record.payload) : {};
   const cwd = string(payload.cwd);
   const parentThreadId = string(payload.parent_thread_id);
   return {
