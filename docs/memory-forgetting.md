@@ -1,6 +1,6 @@
 # Memory Forget: Bedienungsanleitung
 
-Mit **Memory Forget** entfernst du eine einzelne, sichtbare Memory kontrolliert aus dem lokalen Markdown-Memory-Corpus. Vor dem ersten Schreibzugriff zeigt die App alle gefundenen Quellen an. Erst **Apply Forget plan** führt den bestätigten Plan aus. **Forget project…** bietet zusätzlich eine reine Projektvorschau; sie führt noch keine Löschung aus.
+Mit **Memory Forget** entfernst du eine einzelne, sichtbare Memory kontrolliert aus dem lokalen Markdown-Memory-Corpus. **Forget project…** entfernt die Memories eines Projektverzeichnisses aus Markdown und der aktiven Memory-Datenbank. Beide Wege zeigen vor dem ersten Schreibzugriff die betroffenen Quellen an. Erst **Apply Forget plan** führt den bestätigten Plan aus.
 
 ## Wo finde ich die Funktion?
 
@@ -44,7 +44,13 @@ Angezeigt werden die exakten betroffenen Markdown-Abschnitte mit Zeilenbereichen
 
 Als aktiver Memory-Speicher gilt die einzige Datei `memories_<Version>.sqlite` direkt im konfigurierten `CODEX_HOME`. Mehrere passende Dateien blockieren die Vorschau; Entwicklungs- und Snapshot-Datenbanken werden nicht verwendet. Die App liest eine kurzlebige private Kopie einschließlich WAL und entfernt sie danach. Dadurch bleiben auch die SQLite-WAL-Nebendateien des Originals unverändert. Ändert sich die Datenbank während des Kopierens, muss die Vorschau erneuert werden.
 
-In der Projektvorschau gibt es noch keinen Apply-Button. Markdown-Corpus, aktive Datenbank, Session-JSONL, Scheduler-Jobs und vorhandene Datenbank-Snapshots bleiben unverändert. Die Einzel-Memory-Funktion und die separate erweiterte Orphan-Bereinigung stehen weiterhin zur Verfügung.
+Vorschau, Aktualisierung und Abbruch verändern keinen lokalen Speicher. Für **Apply Forget plan** muss der vollständige angezeigte Verzeichnispfad im Feld **Confirm project directory** exakt wiederholt werden. Eine neue Vorschau oder ein anderes Ziel löscht die Bestätigung.
+
+Projekt-Apply prüft den vollständigen Plan nach dem externen Backup erneut. Alle ursprünglichen betroffenen Dateien und vollständigen Datenbankzeilen sind im Backup mit überprüfter Revision dokumentiert. Die aktive SQLite-Datenbank bleibt während der Anwendung für andere Schreibzugriffe gesperrt. Nur passende `stage1_outputs` werden gelöscht; Scheduler-Jobs, Session-JSONL und Entwicklungs- oder Snapshot-Datenbanken bleiben erhalten.
+
+Leere Quelldateien werden nur entfernt, wenn keine externe Memory-Referenz bestehen bleibt. Summary, `MEMORY.md` und `raw_memories.md` werden nie gelöscht. Gemeinsam genutzte Memories und nicht betroffene Inhalte bleiben erhalten. Ein konsolidierter Tombstone benennt das vergessene Projekt.
+
+Die abschließende Prüfung kontrolliert Dateiinhalte und positive Projekt-Memory in beiden Speichern. Erst danach wird die Datenbanktransaktion abgeschlossen. Bei einem Laufzeitfehler werden Dateiänderungen aus dem geprüften Backup wiederhergestellt und Datenbankänderungen zurückgerollt. Das Ergebnis zeigt geänderte Dateien, die Anzahl entfernter Datenbankzeilen, den Tombstone, den Prüfstatus und den Backup-Pfad. Ein harter Prozess- oder Systemabbruch kann eine manuelle Wiederherstellung aus diesem Backup erfordern; automatische Absturz-Reparatur ist nicht enthalten.
 
 ## 2. Den bestätigten Plan anwenden
 
@@ -92,7 +98,7 @@ Der Tombstone ist eine Schutz- und Audit-Markierung des Codex Explorers. Er ist 
 
 ## 3. Später erneut prüfen
 
-Nach erfolgreicher Anwendung steht **Recheck now** zur Verfügung.
+Nach erfolgreicher Einzel-Memory-Anwendung steht **Recheck now** zur Verfügung.
 
 - **No positive copy currently appears in the Memory corpus.** bedeutet: Im aktuellen Markdown-Corpus wurde keine positive Kopie gefunden.
 - **Memory resurfaced in …** bedeutet: Die Memory oder eine ausreichend ähnliche Formulierung ist wieder aufgetaucht; die genannten Dateien sollten erneut geprüft werden.
@@ -102,14 +108,14 @@ Der Recheck läuft ausschließlich auf Anforderung. Es gibt keinen Hintergrund-W
 ## Wenn etwas nicht funktioniert
 
 - **Kein Forget…-Button:** Prüfe Dateiname, Preview-Modus und ungespeicherte Änderungen. Der Button existiert nur in `memory_summary.md` hinter obersten `- `-Einträgen.
-- **Apply Forget plan bleibt deaktiviert:** Bestätige bei mehreren oder ähnlichen Treffern mindestens eine passende Durable Source und klicke **Update plan**.
+- **Apply Forget plan bleibt deaktiviert:** Bestätige bei Einzel-Memories mindestens eine passende Durable Source und klicke **Update plan**. Bei Projektplänen müssen alle Blocker behoben sein und der angezeigte Verzeichnispfad exakt bestätigt werden.
 - **Stale- oder Hash-Fehler:** Eine Quelldatei hat sich seit der Vorschau verändert. Schließe den Dialog, lade die Memory-Analyse neu und beginne erneut.
 - **Recheck meldet resurfaced:** Öffne die genannten Dateien und prüfe, ob der gefundene Abschnitt wirklich dieselbe Information ausdrückt. Der regelbasierte Ähnlichkeitsabgleich kann bewusst vorsichtig anschlagen.
 
 ## Aktuelle Grenzen
 
-- Ein angewendeter Vorgang bearbeitet genau einen Summary-Eintrag; Projektpläne sind Vorschauen.
-- Die Einzel-Memory-Auswahl startet in `memory_summary.md`, die Projektvorschau über **Forget project…**.
+- Ein Vorgang bearbeitet einen Summary-Eintrag oder genau ein Projektverzeichnis einschließlich seiner Unterverzeichnisse.
+- Die Einzel-Memory-Auswahl startet in `memory_summary.md`, die Projektauswahl über **Forget project…**.
 - Die Quellzuordnung ist lokal und deterministisch, nicht frei semantisch.
-- Es gibt noch keine Projekt-Anwendung und keinen automatischen Watcher.
+- Es gibt keinen automatischen Watcher und kein Erase All.
 - Eine spätere Neuerzeugung durch externe Memory-Prozesse kann nicht garantiert verhindert werden.
