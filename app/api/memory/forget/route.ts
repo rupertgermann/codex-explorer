@@ -49,6 +49,10 @@ export async function POST(request: Request) {
     const service = new MemoryForgetService(codexMemoryRoot());
 
     if (body.action === "preview") {
+      if (isRecord(body.selection) && body.selection.kind === "project") {
+        if (typeof body.selection.directory !== "string") throw new Error("A project directory is required.");
+        return NextResponse.json(service.previewProject({ kind: "project", directory: body.selection.directory }), { headers: { "Cache-Control": "no-store" } });
+      }
       if (!isSelection(body.selection)) throw new Error("A valid summary selection is required.");
       return NextResponse.json(service.preview(body.selection), { headers: { "Cache-Control": "no-store" } });
     }

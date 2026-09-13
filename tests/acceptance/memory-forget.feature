@@ -7,6 +7,12 @@ Feature: Control generated Codex Memories
     Then the Forget plan is actionable
     And the preview has not changed any corpus byte
 
+  Scenario: Preview a project through the Forget API without changing any local store
+    Given a disposable project corpus with an active Memory database and session metadata
+    When I preview and refresh the project through the Forget API
+    Then the project preview lists its exact sources and database rows and retains shared Memory
+    And all Memory, database, session and scheduler files are unchanged
+
   Scenario: Require confirmation for repeated durable Memories
     Given a disposable Memory corpus with repeated durable sources
     When I preview the first summary Memory

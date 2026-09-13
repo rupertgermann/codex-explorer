@@ -1,6 +1,6 @@
 # Memory Forget: Bedienungsanleitung
 
-Mit **Memory Forget** entfernst du eine einzelne, sichtbare Memory kontrolliert aus dem lokalen Markdown-Memory-Corpus. Vor dem ersten Schreibzugriff zeigt die App alle gefundenen Quellen an. Erst **Apply Forget plan** führt den bestätigten Plan aus.
+Mit **Memory Forget** entfernst du eine einzelne, sichtbare Memory kontrolliert aus dem lokalen Markdown-Memory-Corpus. Vor dem ersten Schreibzugriff zeigt die App alle gefundenen Quellen an. Erst **Apply Forget plan** führt den bestätigten Plan aus. **Forget project…** bietet zusätzlich eine reine Projektvorschau; sie führt noch keine Löschung aus.
 
 ## Wo finde ich die Funktion?
 
@@ -33,6 +33,18 @@ Bei genau einem eindeutigen Treffer wird die dauerhafte Quelle automatisch best�
 Kann die App keinen sicheren Plan bilden, erklärt sie den Grund und deaktiviert **Apply Forget plan**. **Close** beendet die Vorschau ohne Änderungen.
 
 Die Zuordnung läuft vollständig lokal und regelbasiert. Es wird kein externes Modell aufgerufen und keine freie semantische Entscheidung an eine KI delegiert.
+
+## Projektvorschau mit Forget project…
+
+Öffne **Markdown memory** und klicke oben auf **Forget project…**. Im Feld **Project directory** kannst du ein bekanntes Verzeichnis auswählen oder einen absoluten Pfad eingeben. **Preview project** erstellt die Vorschau; **Refresh preview** berechnet sie erneut und **Cancel** schließt sie. Ungespeicherte Editor-Änderungen sperren den Einstieg.
+
+Die Vorschau umfasst das ausgewählte Verzeichnis und seine echten Unterverzeichnisse: `/work/app` schließt `/work/app/packages/ui` ein, aber nicht `/work/application`. Projektbelege stammen ausschließlich aus `applies_to: cwd=…` der dauerhaften Task Groups und `session_meta` der aktiven oder archivierten Sessions. Freie Pfadnennungen sind keine Projektzuordnung.
+
+Angezeigt werden die exakten betroffenen Markdown-Abschnitte mit Zeilenbereichen, Quelldateien, vollständige passende `stage1_outputs`-Zeilen, gemeinsam genutzte Memories, die bleiben, sowie die Zahl unverändert bleibender Sessions. Ein Summary-Eintrag bleibt erhalten, solange eine dauerhafte Quelle außerhalb des gewählten Verzeichnisses besteht. Nur ähnliche Texte, fehlende Quellen oder widersprüchliche Projektbelege erzeugen einen ausdrücklichen Blocker. Ungültige Pfade, leere Treffer und Ziele über alle projektbezogenen Task Groups sind ebenfalls nicht ausführbar.
+
+Als aktiver Memory-Speicher gilt die einzige Datei `memories_<Version>.sqlite` direkt im konfigurierten `CODEX_HOME`. Mehrere passende Dateien blockieren die Vorschau; Entwicklungs- und Snapshot-Datenbanken werden nicht verwendet. Die App liest eine kurzlebige private Kopie einschließlich WAL und entfernt sie danach. Dadurch bleiben auch die SQLite-WAL-Nebendateien des Originals unverändert. Ändert sich die Datenbank während des Kopierens, muss die Vorschau erneuert werden.
+
+In der Projektvorschau gibt es noch keinen Apply-Button. Markdown-Corpus, aktive Datenbank, Session-JSONL, Scheduler-Jobs und vorhandene Datenbank-Snapshots bleiben unverändert. Die Einzel-Memory-Funktion und die separate erweiterte Orphan-Bereinigung stehen weiterhin zur Verfügung.
 
 ## 2. Den bestätigten Plan anwenden
 
@@ -96,8 +108,8 @@ Der Recheck läuft ausschließlich auf Anforderung. Es gibt keinen Hintergrund-W
 
 ## Aktuelle Grenzen
 
-- Ein Vorgang bearbeitet genau einen Summary-Eintrag.
-- Die Auswahl startet ausschließlich in `memory_summary.md`.
+- Ein angewendeter Vorgang bearbeitet genau einen Summary-Eintrag; Projektpläne sind Vorschauen.
+- Die Einzel-Memory-Auswahl startet in `memory_summary.md`, die Projektvorschau über **Forget project…**.
 - Die Quellzuordnung ist lokal und deterministisch, nicht frei semantisch.
-- Es gibt keine Stapelverarbeitung und keinen automatischen Watcher.
+- Es gibt noch keine Projekt-Anwendung und keinen automatischen Watcher.
 - Eine spätere Neuerzeugung durch externe Memory-Prozesse kann nicht garantiert verhindert werden.

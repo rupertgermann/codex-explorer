@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { After, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { MemoryForgetService } from "../../lib/memory-forget.ts";
 import { MemoryRepository } from "../../lib/memory.ts";
+import { forgetRequest } from "../fixtures/forget-api.mjs";
+import { projectBytes, seedProjectMemory } from "../fixtures/project-memory.mjs";
 
 class ForgetWorld {
   base = "";
@@ -43,6 +45,35 @@ function seed(world, repeated) {
 
 Given("a disposable Memory corpus with one exact durable source", function () { seed(this, false); });
 Given("a disposable Memory corpus with repeated durable sources", function () { seed(this, true); });
+
+Given("a disposable project corpus with an active Memory database and session metadata", function () {
+  this.base = mkdtempSync(join(tmpdir(), "codex-project-acceptance-"));
+  this.project = seedProjectMemory(this.base);
+  this.before = projectBytes(this.base);
+});
+
+When("I preview and refresh the project through the Forget API", async function () {
+  const request = { action: "preview", selection: { kind: "project", directory: "/work/app" } };
+  const first = await forgetRequest(this.project, request);
+  assert.equal(first.status, 200);
+  this.plan = await first.json();
+  const refreshed = await forgetRequest(this.project, request);
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(await refreshed.json(), this.plan);
+});
+
+Then("the project preview lists its exact sources and database rows and retains shared Memory", function () {
+  assert.equal(this.plan.actionable, true, this.plan.reason);
+  assert.equal(this.plan.sections.length, 9);
+  assert.equal(this.plan.untouchedSessionCount, 2);
+  assert.deepEqual(this.plan.database.rows.map(({ thread_id }) => thread_id), ["app", "app-ui"]);
+  assert.deepEqual(this.plan.retainedShared.map(({ content }) => content.trim()), ["- Preserve accessible keyboard navigation."]);
+  for (const section of this.plan.sections) assert.equal(readFileSync(join(this.project.root, section.path), "utf8").slice(section.startOffset, section.endOffset), section.content);
+});
+
+Then("all Memory, database, session and scheduler files are unchanged", function () {
+  assert.deepEqual(projectBytes(this.base), this.before);
+});
 
 When("I preview the first summary Memory", function () {
   const hash = new MemoryRepository(this.root).read("memory_summary.md").hash;
