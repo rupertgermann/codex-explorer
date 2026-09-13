@@ -6,6 +6,8 @@ import { DatabaseSync } from "node:sqlite";
 import { After, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { MemoryForgetService } from "../../lib/memory-forget.ts";
 import { MemoryRepository } from "../../lib/memory.ts";
+import { forgetRequest } from "../fixtures/forget-api.mjs";
+import { projectBytes, seedProjectMemory } from "../fixtures/project-memory.mjs";
 
 class ForgetWorld {
   base = "";
@@ -14,11 +16,6 @@ class ForgetWorld {
   sessionBefore = Buffer.alloc(0);
   plan = null;
   result = null;
-  activeSessionsRoot = "";
-  archivedSessionsRoot = "";
-  databasePath = "";
-  databaseBefore = Buffer.alloc(0);
-  sessionsBefore = [];
 }
 
 setWorldConstructor(ForgetWorld);
@@ -50,89 +47,62 @@ function seed(world, repeated) {
 Given("a disposable Memory corpus with one exact durable source", function () { seed(this, false); });
 Given("a disposable Memory corpus with repeated durable sources", function () { seed(this, true); });
 
-Given("a disposable Memory corpus with project-scoped sources", function () {
-  this.base = mkdtempSync(join(tmpdir(), "codex-project-forget-acceptance-"));
-  this.root = join(this.base, "memories");
-  this.activeSessionsRoot = join(this.base, "sessions");
-  this.archivedSessionsRoot = join(this.base, "archived_sessions");
-  this.databasePath = join(this.base, "memories_1.sqlite");
-  mkdirSync(join(this.root, "rollout_summaries"), { recursive: true });
-  mkdirSync(join(this.root, "extensions", "ad_hoc", "notes"), { recursive: true });
-  mkdirSync(this.activeSessionsRoot, { recursive: true });
-  mkdirSync(this.archivedSessionsRoot, { recursive: true });
-  writeFileSync(join(this.root, "memory_summary.md"), [
-    "# Summary",
-    "",
-    "### /work/alpha",
-    "- Alpha uses a narrow release workflow.",
-    "- Shared release checks.",
-    "",
-    "### /work/alpha-tools",
-    "- Beta keeps separate release notes.",
-    "",
-  ].join("\n"));
-  writeFileSync(join(this.root, "MEMORY.md"), [
-    "# Task Group: Alpha",
-    "scope: Alpha delivery knowledge.",
-    "applies_to: cwd=/work/alpha; reuse_rule=alpha only.",
-    "",
-    "## Task 1: Alpha delivery",
-    "### rollout_summary_files",
-    "- rollout_summaries/alpha.md (thread_id=thread-alpha)",
-    "",
-    "## Reusable knowledge",
-    "- Alpha uses a narrow release workflow. [Task 1] [ad-hoc note]",
-    "- Shared release checks. [Task 1]",
-    "",
-    "# Task Group: Beta",
-    "scope: Beta delivery knowledge.",
-    "applies_to: cwd=/work/alpha-tools; reuse_rule=beta only.",
-    "",
-    "## Task 1: Beta delivery",
-    "### rollout_summary_files",
-    "- rollout_summaries/beta.md (thread_id=thread-beta)",
-    "",
-    "## Reusable knowledge",
-    "- Shared release checks. [Task 1]",
-    "",
-  ].join("\n"));
-  writeFileSync(join(this.root, "raw_memories.md"), [
-    "# Raw",
-    "",
-    "## Thread `thread-alpha`",
-    "- Alpha uses a narrow release workflow.",
-    "",
-    "## Thread `thread-beta`",
-    "- Shared release checks.",
-    "",
-  ].join("\n"));
-  writeFileSync(join(this.root, "rollout_summaries", "alpha.md"), "thread_id: thread-alpha\n\n- Alpha uses a narrow release workflow.\n");
-  writeFileSync(join(this.root, "rollout_summaries", "beta.md"), "thread_id: thread-beta\n\n- Shared release checks.\n");
-  writeFileSync(join(this.root, "extensions", "ad_hoc", "notes", "alpha.md"), "# Alpha\n\n- Alpha uses a narrow release workflow.\n");
-  writeFileSync(join(this.activeSessionsRoot, "alpha.jsonl"), `${JSON.stringify({ timestamp: "2026-08-24T10:00:00Z", type: "session_meta", payload: { id: "thread-alpha", cwd: "/work/alpha" } })}\n`);
-  writeFileSync(join(this.activeSessionsRoot, "beta.jsonl"), `${JSON.stringify({ timestamp: "2026-08-24T11:00:00Z", type: "session_meta", payload: { id: "thread-beta", cwd: "/work/alpha-tools" } })}\n`);
-  const database = new DatabaseSync(this.databasePath);
-  database.exec("CREATE TABLE stage1_outputs (thread_id TEXT PRIMARY KEY, rollout_slug TEXT, selected_for_phase2 INTEGER NOT NULL DEFAULT 0)");
-  database.prepare("INSERT INTO stage1_outputs VALUES (?, ?, ?)").run("thread-alpha", "alpha", 1);
-  database.prepare("INSERT INTO stage1_outputs VALUES (?, ?, ?)").run("thread-beta", "beta", 1);
-  database.close();
-  this.before = corpusBytes(this.root);
-  this.databaseBefore = readFileSync(this.databasePath);
-  this.sessionsBefore = corpusBytes(this.activeSessionsRoot);
+Given("a disposable project corpus with an active Memory database and session metadata", function () {
+  this.base = mkdtempSync(join(tmpdir(), "codex-project-acceptance-"));
+  this.project = seedProjectMemory(this.base);
+  this.before = projectBytes(this.base);
 });
 
-Given("one referenced project source is missing", function () {
-  rmSync(join(this.root, "rollout_summaries", "alpha.md"));
+When("I preview and refresh the project through the Forget API", async function () {
+  const request = { action: "preview", selection: { kind: "project", directory: "/work/app" } };
+  const first = await forgetRequest(this.project, request);
+  assert.equal(first.status, 200);
+  this.plan = await first.json();
+  const refreshed = await forgetRequest(this.project, request);
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(await refreshed.json(), this.plan);
 });
 
-Given("one project rollout has no thread provenance", function () {
-  writeFileSync(join(this.root, "MEMORY.md"), readFileSync(join(this.root, "MEMORY.md"), "utf8").replace(
-    "- rollout_summaries/alpha.md (thread_id=thread-alpha)",
-    "- rollout_summaries/alpha.md\n- rollout_summaries/alpha-resolved.md (thread_id=thread-alpha-resolved)",
-  ));
-  writeFileSync(join(this.root, "rollout_summaries", "alpha.md"), "# Alpha rollout\n\n- Alpha uses a narrow release workflow.\n");
-  writeFileSync(join(this.root, "rollout_summaries", "alpha-resolved.md"), "thread_id: thread-alpha-resolved\n");
-  rmSync(join(this.activeSessionsRoot, "alpha.jsonl"));
+Then("the project preview lists its exact sources and database rows and retains shared Memory", function () {
+  assert.equal(this.plan.actionable, true, this.plan.reason);
+  assert.equal(this.plan.sections.length, 9);
+  assert.equal(this.plan.untouchedSessionCount, 2);
+  assert.deepEqual(this.plan.database.rows.map(({ thread_id }) => thread_id), ["app", "app-ui"]);
+  assert.deepEqual(this.plan.retainedShared.map(({ content }) => content.trim()), ["- Preserve accessible keyboard navigation."]);
+  for (const section of this.plan.sections) assert.equal(readFileSync(join(this.project.root, section.path), "utf8").slice(section.startOffset, section.endOffset), section.content);
+});
+
+Then("all Memory, database, session and scheduler files are unchanged", function () {
+  assert.deepEqual(projectBytes(this.base), this.before);
+});
+
+When("I confirm the exact project directory and apply the plan through the Forget API", async function () {
+  const response = await forgetRequest(this.project, { action: "apply", plan: this.plan, confirmedDirectory: this.plan.directory });
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  this.result = await response.json();
+});
+
+Then("targeted project Memory is absent from both stores and shared Memory remains", function () {
+  const summary = readFileSync(join(this.project.root, "memory_summary.md"), "utf8");
+  assert.doesNotMatch(summary, /Keep project routing|Reuse native controls/);
+  assert.match(summary, /Preserve accessible keyboard navigation/);
+  assert.match(summary, /Separate billing credentials/);
+  const db = new DatabaseSync(this.plan.database.path, { readOnly: true });
+  try {
+    assert.deepEqual(db.prepare("SELECT thread_id FROM stage1_outputs").all().map(({ thread_id }) => thread_id), ["neighbor"]);
+    assert.deepEqual(db.prepare("SELECT * FROM jobs").all().map((row) => ({ ...row })), [{ kind: "memory", job_key: "app", status: "done" }]);
+  } finally { db.close(); }
+  const untouched = (files) => files.filter(([path]) => /^(sessions|archived_sessions|sqlite)\//.test(path));
+  assert.deepEqual(untouched(projectBytes(this.base)), untouched(this.before));
+});
+
+Then("the project result reports its verified external backup and removed row count", function () {
+  assert.equal(this.result.verification, "suppressed");
+  assert.equal(this.result.removedDatabaseRows, 2);
+  const manifest = JSON.parse(readFileSync(this.result.manifestPath, "utf8"));
+  assert.equal(manifest.status, "committed");
+  assert.deepEqual(manifest.database.rows, this.plan.database.rows);
+  assert.match(readFileSync(join(this.project.root, this.result.tombstonePath), "utf8"), /action: delete/);
 });
 
 When("I preview the first summary Memory", function () {
@@ -149,14 +119,6 @@ When("I confirm one exact durable source", function () {
 
 When("I apply the Forget plan", function () {
   this.result = new MemoryForgetService(this.root, join(this.base, "backups")).apply(this.plan);
-});
-
-When("I preview Memory for {string}", function (directory) {
-  this.plan = new MemoryForgetService(this.root, join(this.base, "backups"), {
-    activeSessionsRoot: this.activeSessionsRoot,
-    archivedSessionsRoot: this.archivedSessionsRoot,
-    databasePath: this.databasePath,
-  }).previewProject(directory);
 });
 
 When("the positive Memory resurfaces in a later rollout", function () {
@@ -185,29 +147,6 @@ Then("the manual recheck reports the later rollout", function () {
   const recheck = new MemoryForgetService(this.root, join(this.base, "backups")).recheck(this.plan);
   assert.equal(recheck.status, "resurfaced");
   assert.deepEqual(recheck.resurfaced.map(({ path }) => path), ["rollout_summaries/later.md"]);
-});
-
-Then("the Project Forget plan is actionable", function () { assert.equal(this.plan.actionable, true); });
-Then("the Project Forget plan is blocked by {string}", function (reason) {
-  assert.equal(this.plan.actionable, false);
-  assert.match(this.plan.reason, new RegExp(reason.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"));
-});
-
-Then("the preview lists only the project sources and retains shared Memory", function () {
-  assert.deepEqual(this.plan.scopes, ["/work/alpha"]);
-  assert.deepEqual(this.plan.sections.map(({ kind }) => kind), ["summary", "durable", "raw", "rollout", "ad-hoc"]);
-  assert.equal(this.plan.sections.find(({ kind }) => kind === "durable").content.trim(), "- Alpha uses a narrow release workflow. [Task 1] [ad-hoc note]");
-  assert.deepEqual(this.plan.databaseRows.map(({ threadId }) => threadId), ["thread-alpha"]);
-  assert.equal(this.plan.sessionCount, 1);
-  assert.ok(this.plan.sharedSections.some(({ kind, content }) => kind === "summary" && content.includes("Shared release checks")));
-  assert.ok(this.plan.sharedSections.some(({ kind, content }) => kind === "durable" && content.includes("Shared release checks")));
-  assert.ok(this.plan.sections.filter(({ kind }) => kind === "summary").every(({ content }) => !content.includes("Shared release checks")));
-});
-
-Then("the project preview has not changed the corpus, Memory database, or sessions", function () {
-  assert.deepEqual(corpusBytes(this.root), this.before);
-  assert.deepEqual(readFileSync(this.databasePath), this.databaseBefore);
-  assert.deepEqual(corpusBytes(this.activeSessionsRoot), this.sessionsBefore);
 });
 
 After(function () { if (this.base) rmSync(this.base, { recursive: true, force: true }); });
