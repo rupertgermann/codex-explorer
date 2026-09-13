@@ -17,7 +17,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 - Searches all memory content with file and line-level matches
 - Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
 - Previews and applies one explicitly confirmed Memory Forget plan with external backup, rollback, a delete tombstone, and manual resurfacing checks; see the [Memory Forget user guide](docs/memory-forgetting.md)
-- Previews **Forget project…** in the same Memory workspace: exact source sections, active Memory database rows, retained shared Memories, untouched session count, and provenance blockers; project Apply is not yet available
+- Previews and applies **Forget project…** in the same Memory workspace with exact directory confirmation, verified external backups, coordinated Markdown/SQLite rollback, retained shared Memories, and a verified result
 - Inspects dependencies before deleting one explicitly confirmed orphaned non-core Memory file, with revision revalidation and a verified external backup
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Browses human messages and tool calls with per-session event analysis

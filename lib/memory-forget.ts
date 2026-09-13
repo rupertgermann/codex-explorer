@@ -6,16 +6,20 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
+  renameSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { openReadonly } from "./database.ts";
 import { atomicMemoryWrite, memoryHash, MemoryConflictError, MemoryRepository, resolveMemoryMarkdownPath } from "./memory.ts";
 import { codexSessionsRoot, SessionRepository } from "./sessions.ts";
+import { isAggregateMemoryFile, referencesCandidate } from "./memory-orphan.ts";
 
 export type ForgetSectionKind = "summary" | "durable" | "raw" | "rollout" | "ad-hoc";
 
@@ -76,6 +80,7 @@ export type ForgetResult = {
   rolledBack: boolean;
   tombstonePath: string;
   verification: "suppressed";
+  removedDatabaseRows?: number;
 };
 
 const ALLOWED_ROOT_FILES = new Map<string, ForgetSectionKind>([
@@ -345,7 +350,7 @@ export class MemoryForgetService {
     };
   }
 
-  previewProject(selection: ProjectForgetSelection): ProjectForgetPlan {
+  previewProject(selection: ProjectForgetSelection, database?: DatabaseSync): ProjectForgetPlan {
     const repository = new MemoryRepository(this.root);
     const documents = repository.catalog().files.map(({ path }) => repository.read(path));
     const contents = new Map(documents.map(({ path, content }) => [path, content]));
@@ -499,7 +504,7 @@ export class MemoryForgetService {
     else if (databasePaths.length === 1) {
       plan.database.path = databasePaths[0];
       try {
-        const rows = projectDatabaseRows(databasePaths[0]);
+        const rows = database ? database.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all() : projectDatabaseRows(databasePaths[0]);
         for (const row of rows) {
           const id = String(row.thread_id ?? "");
           const scope = sessionScope(id);
@@ -524,13 +529,22 @@ export class MemoryForgetService {
     return plan;
   }
 
-  apply(plan: ForgetPlan): ForgetResult {
-    if (!plan.actionable || !plan.sections.some(({ kind }) => kind === "durable")) throw new Error("The Forget plan is not confirmed.");
-    const fresh = this.preview(plan.selection);
-    if (fresh.fingerprint !== plan.fingerprint || fresh.sections.map(({ id }) => id).join() !== plan.sections.map(({ id }) => id).join()) {
-      throw new MemoryConflictError("The Forget plan no longer matches the Memory corpus. Refresh its preview.");
+  apply(plan: ForgetPlan | ProjectForgetPlan, confirmedDirectory?: string): ForgetResult {
+    if ("kind" in plan) {
+      if (confirmedDirectory !== plan.directory) throw new Error("Confirm the exact project directory before applying its Forget plan.");
+      if (!plan.actionable) throw new Error("The Project Forget plan is blocked.");
+      if (JSON.stringify(this.previewProject(plan.selection)) !== JSON.stringify(plan)) {
+        throw new MemoryConflictError("The Project Forget plan changed. Refresh its preview and confirm it again.");
+      }
+    } else {
+      if (!plan.actionable || !plan.sections.some(({ kind }) => kind === "durable")) throw new Error("The Forget plan is not confirmed.");
+      const fresh = this.preview(plan.selection);
+      if (fresh.fingerprint !== plan.fingerprint || fresh.sections.map(({ id }) => id).join() !== plan.sections.map(({ id }) => id).join()) {
+        throw new MemoryConflictError("The Forget plan no longer matches the Memory corpus. Refresh its preview.");
+      }
+      plan = fresh;
     }
-    plan = fresh;
+    const project = "kind" in plan ? plan : null;
     const byPath = Map.groupBy(plan.sections, (section) => section.path);
     const originals = new Map<string, string>();
     for (const [path, sections] of byPath) {
@@ -547,47 +561,129 @@ export class MemoryForgetService {
     const tombstonePath = linkedNote?.path ?? `extensions/ad_hoc/notes/${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-forget-${plan.fingerprint.slice(0, 10)}-${randomUUID().slice(0, 8)}.md`;
     this.rejectDuplicateTombstone(plan.fingerprint, tombstonePath);
     if (!linkedNote && existsSync(this.safeNewPath(tombstonePath))) throw new MemoryConflictError("The planned tombstone path already exists.");
+    let backupParent = this.backupRoot;
+    while (!existsSync(backupParent)) backupParent = dirname(backupParent);
+    const canonicalBackup = resolve(realpathSync(backupParent), relative(backupParent, this.backupRoot));
+    if (insideProject(canonicalBackup, realpathSync(this.root))) throw new Error("Forget backups must be stored outside the Memory corpus.");
     const transactionRoot = join(this.backupRoot, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`);
-    mkdirSync(transactionRoot, { recursive: true });
+    mkdirSync(transactionRoot, { recursive: true, mode: 0o700 });
     for (const [path, content] of originals) {
       const backup = join(transactionRoot, "files", path);
-      mkdirSync(dirname(backup), { recursive: true });
-      writeFileSync(backup, content);
+      mkdirSync(dirname(backup), { recursive: true, mode: 0o700 });
+      writeFileSync(backup, content, { mode: 0o600 });
       if (memoryHash(readFileSync(backup, "utf8")) !== memoryHash(content)) throw new Error(`Could not verify backup for ${path}.`);
     }
     const manifestPath = join(transactionRoot, "manifest.json");
-    writeFileSync(manifestPath, JSON.stringify({ status: "prepared", fingerprint: plan.fingerprint, paths: [...originals.keys()], tombstonePath }, null, 2));
+    const manifest = {
+      fingerprint: plan.fingerprint,
+      paths: [...originals.keys()],
+      files: [...originals].map(([path, content]) => ({ path, expectedHash: memoryHash(content) })),
+      tombstonePath,
+      ...(project ? { directory: project.directory, database: project.database } : {}),
+    };
+    const prepared = JSON.stringify({ ...manifest, status: "prepared" }, null, 2);
+    writeFileSync(manifestPath, prepared, { mode: 0o600 });
+    if (readFileSync(manifestPath, "utf8") !== prepared) throw new Error("Could not verify the Forget backup manifest.");
 
-    const tombstone = `# Delete memory\n\n- action: delete\n  ${TOMBSTONE_MARKER} sha256:${plan.fingerprint}\n  memory: ${plan.target}\n`;
+    const target = "kind" in plan ? "Memories assigned to " + plan.directory : plan.target;
+    const tombstone = `# Delete memory\n\n- action: delete\n  ${TOMBSTONE_MARKER} sha256:${plan.fingerprint}\n  memory: ${target}\n`;
     const outputs = new Map<string, string | null>();
     for (const [path, sections] of byPath) {
       let next = withoutRanges(originals.get(path) ?? "", sections);
       if (path === linkedNote?.path) next = `${next.trimEnd()}\n\n${tombstone}`;
-      outputs.set(path, kindFor(path) === "rollout" && next.trim() === "" ? null : next);
+      outputs.set(path, !project && kindFor(path) === "rollout" && next.trim() === "" ? null : next);
     }
     if (!linkedNote) outputs.set(tombstonePath, tombstone);
+    if (project) {
+      const documents = new MemoryRepository(this.root).catalog().files.map(({ path }) => ({
+        path, content: outputs.get(path) ?? readFileSync(resolveMemoryMarkdownPath(this.root, path), "utf8"),
+      }));
+      for (const [path, content] of outputs) {
+        if (content?.trim() !== "" || isAggregateMemoryFile(this.root, path)) continue;
+        const referenced = documents.some((document) => document.path !== path
+          && document.content.split(/\r?\n/).some((line) => referencesCandidate(line, document.path, path)));
+        if (!referenced) outputs.set(path, null);
+      }
+    }
 
     const written: string[] = [];
+    let database: DatabaseSync | undefined;
+    let originalRows: Record<string, unknown>[] = [];
+    let originalJobs: string | null = null;
     try {
+      if (project?.database.path) {
+        if (!existsSync(project.database.path)) throw new MemoryConflictError("The active Memory database disappeared. Refresh its preview.");
+        database = new DatabaseSync(project.database.path);
+        database.exec("BEGIN IMMEDIATE");
+        originalRows = database.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all();
+        if (database.prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'jobs'").get()) {
+          originalJobs = JSON.stringify(database.prepare("SELECT * FROM jobs").all());
+        }
+      }
+      // Revalidate the complete preview after backup, with database writers excluded.
+      if (project && JSON.stringify(this.previewProject(project.selection, database)) !== JSON.stringify(project)) {
+        throw new MemoryConflictError("The Project Forget plan became stale during backup. Refresh its preview.");
+      }
       for (const [path, content] of outputs) {
         const expected = originals.has(path) ? memoryHash(originals.get(path) ?? "") : undefined;
         const absolute = this.safeNewPath(path);
         if (content === null) {
           if (expected === undefined || memoryHash(readFileSync(absolute, "utf8")) !== expected) throw new MemoryConflictError();
-          unlinkSync(absolute);
+          if (project) {
+            const quarantine = join(dirname(absolute), "." + basename(absolute) + "." + randomUUID() + ".forget-delete");
+            renameSync(absolute, quarantine);
+            try {
+              if (memoryHash(readFileSync(quarantine, "utf8")) !== expected) throw new MemoryConflictError();
+              unlinkSync(quarantine);
+            } catch (error) {
+              if (existsSync(quarantine) && !existsSync(absolute)) renameSync(quarantine, absolute);
+              throw error;
+            }
+          } else unlinkSync(absolute);
         } else {
           atomicMemoryWrite(absolute, content, expected);
         }
         written.push(path);
       }
-      const verification = this.recheck(plan);
-      if (verification.status === "resurfaced") {
-        throw new Error(`Post-apply verification found the Memory in ${verification.resurfaced.map(({ path }) => path).join(", ")}.`);
+      if (database && project) {
+        for (const row of project.database.rows) {
+          if (database.prepare("DELETE FROM stage1_outputs WHERE thread_id = ?").run(row.thread_id).changes !== 1) {
+            throw new MemoryConflictError("A targeted Memory database row changed before deletion.");
+          }
+        }
+        const remaining = database.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all();
+        const expected = originalRows.filter((row) => !project.matchedSessionIds.includes(String(row.thread_id)));
+        if (JSON.stringify(remaining) !== JSON.stringify(expected)
+          || originalJobs !== null && JSON.stringify(database.prepare("SELECT * FROM jobs").all()) !== originalJobs) {
+          throw new Error("Database verification found changes outside the targeted Memory rows.");
+        }
       }
-      writeFileSync(manifestPath, JSON.stringify({ status: "committed", fingerprint: plan.fingerprint, paths: [...outputs.keys()], tombstonePath }, null, 2));
-      return { changedPaths: [...outputs.keys()], manifestPath, rolledBack: false, tombstonePath, verification: "suppressed" };
+      if (project) {
+        for (const [path, content] of outputs) {
+          const absolute = this.safeNewPath(path);
+          if (content === null ? existsSync(absolute) : memoryHash(readFileSync(absolute, "utf8")) !== memoryHash(content)) {
+            throw new Error("Post-apply file verification failed for " + path + ".");
+          }
+        }
+      }
+      const verification = "kind" in plan ? this.recheckProject(plan, database) : this.recheck(plan);
+      if (verification.status === "resurfaced") {
+        throw new Error("Post-apply verification still found targeted positive Memory.");
+      }
+      writeFileSync(manifestPath, JSON.stringify({ ...manifest, status: "committed", paths: [...outputs.keys()] }, null, 2));
+      // COMMIT is the final fallible operation; runtime failures before it restore both stores.
+      database?.exec("COMMIT");
+      return { changedPaths: [...outputs.keys()], manifestPath, rolledBack: false, tombstonePath, verification: "suppressed", ...(project ? { removedDatabaseRows: project.database.rows.length } : {}) };
     } catch (error) {
       const rollbackFailures: string[] = [];
+      if (database) {
+        try {
+          if (database.isTransaction) database.exec("ROLLBACK");
+          if (written.length && JSON.stringify(database.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all()) !== JSON.stringify(originalRows)) {
+            rollbackFailures.push("stage1_outputs");
+          }
+        } catch { rollbackFailures.push("stage1_outputs"); }
+      }
       for (const path of [...written].reverse()) {
         try {
           const absolute = this.safeNewPath(path);
@@ -597,17 +693,37 @@ export class MemoryForgetService {
             rollbackFailures.push(path);
             continue;
           }
-          if (originals.has(path)) atomicMemoryWrite(absolute, originals.get(path) ?? "", output === null ? undefined : memoryHash(output ?? ""));
+          if (originals.has(path)) {
+            const restored = readFileSync(join(transactionRoot, "files", path), "utf8");
+            if (memoryHash(restored) !== memoryHash(originals.get(path) ?? "")) throw new Error("The backup revision changed.");
+            atomicMemoryWrite(absolute, restored, output === null ? undefined : memoryHash(output ?? ""));
+          }
           else unlinkSync(absolute);
         } catch {
           rollbackFailures.push(path);
         }
       }
-      writeFileSync(manifestPath, JSON.stringify({ status: rollbackFailures.length ? "rollback-conflict" : "rolled-back", fingerprint: plan.fingerprint, paths: written, tombstonePath, rollbackFailures }, null, 2));
+      writeFileSync(manifestPath, JSON.stringify({ ...manifest, status: rollbackFailures.length ? "rollback-conflict" : "rolled-back", paths: written, rollbackFailures }, null, 2));
+      if (!written.length && !rollbackFailures.length && error instanceof MemoryConflictError) throw error;
       throw new Error(rollbackFailures.length
         ? `Forget failed; rollback conflicts: ${rollbackFailures.join(", ")}. Backup: ${manifestPath}`
         : `Forget failed and was rolled back: ${error instanceof Error ? error.message : "unknown error"} Backup: ${manifestPath}`);
-    }
+    } finally { database?.close(); }
+  }
+
+  private recheckProject(plan: ProjectForgetPlan, database?: DatabaseSync) {
+    const fresh = this.previewProject(plan.selection, database);
+    const positive = (sections: ForgetSection[]) => sections.flatMap((section) =>
+      bulletSections(section.path, section.kind, section.content).map(({ content }) => canonical(content)));
+    const targets = new Set(positive(plan.sections));
+    const durable = existsSync(join(this.root, "MEMORY.md")) ? new MemoryRepository(this.root).read("MEMORY.md").content : "";
+    const outside = projectGroups(durable).filter((group) => group.directories.length
+      && group.directories.every((cwd) => !insideProject(cwd, plan.directory)));
+    const retained = new Set(positive([...plan.retainedShared, ...outside.map(({ section }) => section)]));
+    const resurfaced = this.allSections().filter((section) => !section.content.includes(TOMBSTONE_MARKER)
+      && targets.has(canonical(section.content)) && !retained.has(canonical(section.content)));
+    const blocked = fresh.blockers.some((blocker) => blocker !== "No project Memories match this directory.");
+    return { status: blocked || fresh.sections.length || fresh.database.rows.length || resurfaced.length ? "resurfaced" as const : "suppressed" as const, resurfaced };
   }
 
   recheck(plan: Pick<ForgetPlan, "fingerprint" | "target"> & Partial<Pick<ForgetPlan, "targets">>) {

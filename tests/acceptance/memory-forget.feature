@@ -20,6 +20,13 @@ Feature: Control generated Codex Memories
     When I confirm one exact durable source
     Then the Forget plan is actionable
 
+  Scenario: Apply a project through the Forget API and reconcile both stores
+    Given a disposable project corpus with an active Memory database and session metadata
+    When I preview and refresh the project through the Forget API
+    And I confirm the exact project directory and apply the plan through the Forget API
+    Then targeted project Memory is absent from both stores and shared Memory remains
+    And the project result reports its verified external backup and removed row count
+
   Scenario: Apply a recoverable Forget plan without touching sessions
     Given a disposable Memory corpus with one exact durable source
     When I preview the first summary Memory

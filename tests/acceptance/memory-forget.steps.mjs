@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { After, Given, Then, When, setWorldConstructor } from "@cucumber/cucumber";
 import { MemoryForgetService } from "../../lib/memory-forget.ts";
 import { MemoryRepository } from "../../lib/memory.ts";
@@ -73,6 +74,35 @@ Then("the project preview lists its exact sources and database rows and retains 
 
 Then("all Memory, database, session and scheduler files are unchanged", function () {
   assert.deepEqual(projectBytes(this.base), this.before);
+});
+
+When("I confirm the exact project directory and apply the plan through the Forget API", async function () {
+  const response = await forgetRequest(this.project, { action: "apply", plan: this.plan, confirmedDirectory: this.plan.directory });
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  this.result = await response.json();
+});
+
+Then("targeted project Memory is absent from both stores and shared Memory remains", function () {
+  const summary = readFileSync(join(this.project.root, "memory_summary.md"), "utf8");
+  assert.doesNotMatch(summary, /Keep project routing|Reuse native controls/);
+  assert.match(summary, /Preserve accessible keyboard navigation/);
+  assert.match(summary, /Separate billing credentials/);
+  const db = new DatabaseSync(this.plan.database.path, { readOnly: true });
+  try {
+    assert.deepEqual(db.prepare("SELECT thread_id FROM stage1_outputs").all().map(({ thread_id }) => thread_id), ["neighbor"]);
+    assert.deepEqual(db.prepare("SELECT * FROM jobs").all().map((row) => ({ ...row })), [{ kind: "memory", job_key: "app", status: "done" }]);
+  } finally { db.close(); }
+  const untouched = (files) => files.filter(([path]) => /^(sessions|archived_sessions|sqlite)\//.test(path));
+  assert.deepEqual(untouched(projectBytes(this.base)), untouched(this.before));
+});
+
+Then("the project result reports its verified external backup and removed row count", function () {
+  assert.equal(this.result.verification, "suppressed");
+  assert.equal(this.result.removedDatabaseRows, 2);
+  const manifest = JSON.parse(readFileSync(this.result.manifestPath, "utf8"));
+  assert.equal(manifest.status, "committed");
+  assert.deepEqual(manifest.database.rows, this.plan.database.rows);
+  assert.match(readFileSync(join(this.project.root, this.result.tombstonePath), "utf8"), /action: delete/);
 });
 
 When("I preview the first summary Memory", function () {

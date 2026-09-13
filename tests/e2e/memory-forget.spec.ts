@@ -19,7 +19,7 @@ test("selects, refreshes and cancels Project Forget while protecting unsaved edi
   await expect(dialog.getByText("Matching stage1_outputs (2)")).toBeVisible();
   await expect(dialog.getByText("Retained shared Memories (1)")).toBeVisible();
   await expect(dialog.getByText(/2 matching sessions stay untouched/)).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Apply Forget plan" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Apply Forget plan" })).toBeDisabled();
   await dialog.getByRole("button", { name: "Refresh preview" }).click();
   await expect(dialog.getByRole("button", { name: "Refresh preview" })).toBeEnabled();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
@@ -73,4 +73,32 @@ test("reaches orphan deletion only through the dedicated advanced workflow", asy
 
   await expect(dialog.getByText("The confirmed orphan file was deleted.")).toBeVisible();
   await expect(page.getByRole("button", { name: /rollout_summaries\/orphan\.md/ })).toHaveCount(0);
+});
+
+test("applies a Project Forget plan after exact directory confirmation and shows the verified result", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Markdown memory" }).click();
+  await page.getByRole("button", { name: "Forget project…" }).click();
+  const dialog = page.getByRole("dialog", { name: "Forget project…" });
+  await dialog.getByLabel("Project directory", { exact: true }).fill("/work/app");
+  await dialog.getByRole("button", { name: "Preview project" }).click();
+  await expect(dialog.getByText("Matching stage1_outputs (2)")).toBeVisible();
+  const apply = dialog.getByRole("button", { name: "Apply Forget plan" });
+  const confirmation = dialog.getByLabel("Confirm project directory", { exact: true });
+  await expect(apply).toBeDisabled();
+  await confirmation.fill("/work/application");
+  await expect(apply).toBeDisabled();
+  await confirmation.fill("/work/app");
+  await expect(apply).toBeEnabled();
+  await dialog.getByRole("button", { name: "Refresh preview" }).click();
+  await expect(confirmation).toHaveValue("");
+  await expect(apply).toBeDisabled();
+  await confirmation.fill("/work/app");
+  await apply.click();
+  await expect(dialog.getByText("Memory removed and verified; delete tombstone written.")).toBeVisible();
+  await expect(dialog.getByText("2 database Memory rows removed. No targeted positive Memory remains in Markdown or stage1_outputs.")).toBeVisible();
+  await expect(dialog.getByText(/^Backup:/)).toBeVisible();
+  await expect(dialog.getByText(/^Tombstone:/)).toBeVisible();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByText("Preserve accessible keyboard navigation.", { exact: true })).toBeVisible();
 });

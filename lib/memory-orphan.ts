@@ -48,7 +48,7 @@ type OrphanServiceOptions = {
 
 const DELETE_MARKER = "codex-explorer-forget:";
 
-function isAggregateMemoryFile(root: string, path: string) {
+export function isAggregateMemoryFile(root: string, path: string) {
   if (isAggregateMemoryPath(path)) return true;
   const candidate = statSync(resolveMemoryMarkdownPath(root, path));
   return AGGREGATE_MEMORY_PATHS.some((aggregatePath) => {
@@ -88,7 +88,7 @@ function resolvesToCandidate(target: string, sourcePath: string, candidatePath: 
   }
 }
 
-function referencesCandidate(line: string, sourcePath: string, candidatePath: string) {
+export function referencesCandidate(line: string, sourcePath: string, candidatePath: string) {
   if (line.includes(candidatePath)) return true;
   const destinations = [
     ...line.matchAll(/!?\[[^\]]*\]\(\s*<?([^\s)>]+\.md(?:[?#][^\s)>]*)?)>?/gi),

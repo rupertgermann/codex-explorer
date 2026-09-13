@@ -118,6 +118,7 @@ export function MemoryWorkspace() {
   const [forgetOpen, setForgetOpen] = useState(false);
   const [forgetPlan, setForgetPlan] = useState<ForgetPlan | ProjectForgetPlan | null>(null);
   const [forgetDirectory, setForgetDirectory] = useState<string | null>(null);
+  const [forgetConfirmation, setForgetConfirmation] = useState("");
   const [forgetResult, setForgetResult] = useState<ForgetResult | null>(null);
   const [forgetRecheck, setForgetRecheck] = useState<ForgetRecheck | null>(null);
   const [forgetLoading, setForgetLoading] = useState(false);
@@ -227,6 +228,7 @@ export function MemoryWorkspace() {
 
   async function previewProjectForget(directory: string) {
     if (dirty) return;
+    setForgetConfirmation("");
     setForgetDirectory(directory); setForgetOpen(true); setForgetLoading(true); setForgetError(null); setForgetResult(null); setForgetRecheck(null);
     try {
       const plan = await memoryRequest<ProjectForgetPlan>("/api/memory/forget", {
@@ -242,20 +244,25 @@ export function MemoryWorkspace() {
   }
 
   async function applyForget() {
-    if (!forgetPlan?.actionable || "kind" in forgetPlan || dirty) return;
+    if (!forgetPlan?.actionable || dirty) return;
+    if ("kind" in forgetPlan && (forgetDirectory !== forgetPlan.directory || forgetConfirmation !== forgetPlan.directory)) return;
     setForgetLoading(true); setForgetError(null);
+    let applied = false;
     try {
       const result = await memoryRequest<ForgetResult>("/api/memory/forget", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "apply", plan: forgetPlan }),
+        body: JSON.stringify({ action: "apply", plan: forgetPlan, ...("kind" in forgetPlan ? { confirmedDirectory: forgetConfirmation } : {}) }),
       });
+      applied = true;
       setForgetResult(result);
       const next = await memorySnapshot(false);
       setCatalog(next.catalog);
-      const refreshed = await memoryRequest<MemoryDocument>("/api/memory/document?path=memory_summary.md");
+      const path = next.catalog.files.find(({ path }) => path === "memory_summary.md")?.path ?? next.catalog.files[0]?.path;
+      const refreshed = await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(path)}`);
       setDocument(refreshed); setEditedContent(refreshed.content);
     } catch (error) {
+      if ("kind" in forgetPlan && !applied) { setForgetPlan(null); setForgetConfirmation(""); }
       setForgetError(error instanceof Error ? error.message : "Could not apply this Forget plan.");
     } finally { setForgetLoading(false); }
   }
@@ -362,7 +369,13 @@ export function MemoryWorkspace() {
         result={forgetResult}
         recheck={forgetRecheck}
         confirmedDurableIds={confirmedDurableIds}
-        project={forgetDirectory === null ? undefined : { directory: forgetDirectory, onDirectoryChange: setForgetDirectory, onPreview: () => { void previewProjectForget(forgetDirectory); } }}
+        project={forgetDirectory === null ? undefined : {
+          directory: forgetDirectory,
+          confirmation: forgetConfirmation,
+          onConfirmationChange: setForgetConfirmation,
+          onDirectoryChange: (directory) => { setForgetDirectory(directory); setForgetConfirmation(""); },
+          onPreview: () => { void previewProjectForget(forgetDirectory); },
+        }}
         onOpenChange={setForgetOpen}
         onConfirm={(id, confirmed) => setConfirmedDurableIds((ids) => confirmed ? [...new Set([...ids, id])] : ids.filter((item) => item !== id))}
         onRefresh={() => { if (forgetPlan && !("kind" in forgetPlan)) void previewForget(forgetPlan.selection.summaryLine, confirmedDurableIds); }}
