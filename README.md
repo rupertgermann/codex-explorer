@@ -18,12 +18,25 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 - Searches all memory content with file and line-level matches
 - Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
 - Previews and applies one explicitly confirmed Memory Forget plan with external backup, rollback, a delete tombstone, and manual resurfacing checks; see the [Memory Forget user guide](docs/memory-forgetting.md)
+- Previews and applies **Forget project…** in the same Memory workspace with exact directory confirmation, verified external backups, coordinated Markdown/SQLite rollback, retained shared Memories, and a verified result
 - Inspects dependencies before deleting one explicitly confirmed orphaned non-core Memory file, with revision revalidation and a verified external backup
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Browses human messages and tool calls with per-session event analysis
 - Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest
 - Streams complete transcripts on demand and exposes every file through a bounded, byte-paginated Raw JSONL viewer
 - Searches session contents explicitly with a bounded full-text scan
+- Reports token usage across active and archived sessions, grouped by model, reasoning effort and historical speed (fast / normal / unknown)
+- Charts hourly usage alongside recorded account quota, with day/range selection, zoom, pan, fullscreen, daily totals and CSV exports
+
+## Usage report
+
+Open **Usage report**, choose the start and end in your local timezone, then press **Generate report**. The end is exclusive. Scanning is explicit and cancellable; changing model, effort or speed filters reuses the loaded telemetry. Session rows show their own filtered usage, with model breakdowns and one-hour or six-hour windows. CSV exports use UTC timestamps.
+
+The report adapts the counting, active intervals, quota ledger and SVG chart from `codex-insights-2026-09-10-1013` (`extract_usage.py`, `build_report.py`, `quota_analysis.py`, `usage-chart.js`) into the app's TypeScript runtime. It requires no Python process, new dependency, copied private report data or external source directory at runtime.
+
+Tokens are input + output; cached input and reasoning output are subsets. Repeated cumulative counters and duplicated files do not add usage twice. Model and effort come from each turn context; speed comes from historical `service_tier` settings (`priority` = fast, `default` = normal). Missing settings remain unknown. Active session hours exclude pauses between turns and count concurrent sessions separately; active clock hours merge overlap. Missing task boundaries make rates approximate. Restored streams with rewritten timestamps are excluded from dated token/quota totals and still block unsafe quota attribution.
+
+Quota is account-wide, so model filters never alter its timeline. Each limit ID/window is kept separate. Resets, stale readings and gaps over five minutes break the line. Comparisons require continuous isolated local activity, matching model/effort/speed and a configurable minimum measured duration. Percentage points are observations, not token prices or proof that one setting is cheaper; remote usage is unobserved. The data-quality section reports skipped telemetry and unknown speed.
 
 ## Privacy & security
 
@@ -51,7 +64,7 @@ Then open [http://localhost:3000](http://localhost:3000).
 | `CODEX_DB_DIRECTORY` | – | Additional directory of SQLite files to include |
 | `CODEX_MEMORY_DIRECTORY` | `$CODEX_HOME/memories` | Markdown memory root |
 | `CODEX_SESSIONS_DIRECTORY` | `$CODEX_HOME/sessions` | JSONL session archive root |
-| `CODEX_ARCHIVED_SESSIONS_DIRECTORY` | `$CODEX_HOME/archived_sessions` | Archived JSONL root inspected read-only for orphan provenance |
+| `CODEX_ARCHIVED_SESSIONS_DIRECTORY` | `$CODEX_HOME/archived_sessions` | Archived JSONL root inspected read-only for usage reports and orphan provenance |
 
 ```bash
 CODEX_DB_DIRECTORY=/absolute/path/to/databases npm run dev
