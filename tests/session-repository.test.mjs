@@ -130,6 +130,8 @@ test("searches session contents and rejects paths outside the session root", asy
   writeSession(root, "2026/08/match.jsonl", [
     { timestamp: "2026-08-24T10:00:00.000Z", type: "session_meta", payload: { id: "match", cwd: "/work/alpha" } },
     { timestamp: "2026-08-24T10:00:01.000Z", type: "event_msg", payload: { type: "user_message", message: "Needle phrase" } },
+    { timestamp: "2026-08-24T10:00:02.000Z", type: "event_msg", payload: { type: "agent_message", message: "The needle phrase appears in an answer." } },
+    { timestamp: "2026-08-24T10:00:03.000Z", type: "response_item", payload: { type: "function_call", name: "lookup", arguments: "{\"query\":\"needle phrase\"}" } },
   ]);
   writeSession(root, "2026/08/miss.jsonl", [
     { timestamp: "2026-08-23T10:00:00.000Z", type: "session_meta", payload: { id: "miss", cwd: "/work/beta" } },
@@ -139,8 +141,42 @@ test("searches session contents and rejects paths outside the session root", asy
   const results = await repository.search("needle phrase");
 
   assert.deepEqual(results.map((session) => session.id), ["match"]);
+  assert.deepEqual(results[0].matches, [
+    { line: 2, kind: "user", excerpt: "Needle phrase" },
+    { line: 3, kind: "assistant", excerpt: "The needle phrase appears in an answer." },
+    { line: 4, kind: "tool", excerpt: "lookup {\"query\":\"needle phrase\"}" },
+  ]);
   await assert.rejects(() => repository.read("../outside.jsonl"), { name: "SessionPathError" });
   await assert.rejects(() => repository.read("not-json.txt"), { name: "SessionPathError" });
+});
+
+test("treats punctuation in session search as literal text", async () => {
+  const root = sessionRoot();
+  writeSession(root, "2026/08/literal.jsonl", [
+    { type: "session_meta", payload: { id: "literal", cwd: "/work/literal" } },
+    { type: "event_msg", payload: { type: "user_message", message: "Keep [needle]+ literal." } },
+  ]);
+
+  const results = await new SessionRepository(root).search("[needle]+");
+
+  assert.deepEqual(results.map((session) => session.id), ["literal"]);
+  assert.equal(results[0].matches[0].excerpt, "Keep [needle]+ literal.");
+});
+
+test("caps broad session searches at the newest 100 files", async () => {
+  const root = sessionRoot();
+  for (let index = 0; index <= 100; index += 1) {
+    writeSession(root, `2026/08/${String(index).padStart(3, "0")}.jsonl`, [
+      { timestamp: new Date(Date.UTC(2026, 7, 1, 0, index)).toISOString(), type: "session_meta", payload: { id: `session-${index}`, cwd: "/work/broad" } },
+      { type: "event_msg", payload: { type: "user_message", message: "Broad needle" } },
+    ]);
+  }
+
+  const results = await new SessionRepository(root).search("broad needle");
+
+  assert.equal(results.length, 100);
+  assert.equal(results[0].id, "session-100");
+  assert.equal(results.at(-1).id, "session-1");
 });
 
 test("reads raw JSONL content in bounded byte pages", () => {

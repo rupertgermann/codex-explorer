@@ -20,6 +20,16 @@ export type SessionSummary = {
   parentThreadId: string;
 };
 
+export type SessionSearchMatch = {
+  line: number;
+  kind: "user" | "assistant" | "tool" | "metadata" | "raw";
+  excerpt: string;
+};
+
+export type SessionSearchResult = SessionSummary & {
+  matches: SessionSearchMatch[];
+};
+
 export type SessionCatalog = {
   root: string;
   indexedAt: number;
@@ -279,18 +289,90 @@ export async function scanJsonl(
   };
 }
 
-function ripgrepFiles(root: string, query: string): Promise<string[]> {
+function searchExcerpt(value: string, query: string) {
+  const text = value.replace(/\s+/g, " ").trim();
+  const index = text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
+  if (index < 0) return text.slice(0, 280);
+  const start = Math.max(0, index - 100);
+  const end = Math.min(text.length, index + query.length + 160);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+}
+
+function sessionSearchMatch(rawLine: string, line: number, query: string): SessionSearchMatch {
+  try {
+    const record = JSON.parse(rawLine) as JsonRecord;
+    const recordType = string(record.type);
+    const payload = object(record.payload);
+    const payloadType = string(payload.type);
+    if (recordType === "event_msg" && (payloadType === "user_message" || payloadType === "agent_message")) {
+      return {
+        line,
+        kind: payloadType === "user_message" ? "user" : "assistant",
+        excerpt: searchExcerpt(string(payload.message), query),
+      };
+    }
+    if (recordType === "response_item" && (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType.endsWith("_call"))) {
+      const detail = `${string(payload.name) || payloadType} ${string(payload.arguments) || string(payload.input)}`;
+      return { line, kind: "tool", excerpt: searchExcerpt(detail, query) };
+    }
+    if (recordType === "session_meta") {
+      const detail = [string(payload.id), string(payload.cwd), string(payload.source), string(payload.originator)].filter(Boolean).join(" · ");
+      return { line, kind: "metadata", excerpt: searchExcerpt(detail, query) };
+    }
+  } catch {
+    // A bounded ripgrep excerpt may contain only part of a very large JSONL record.
+  }
+  const readable = rawLine.replaceAll("\\n", " ").replaceAll('\\"', '"').replace(/[{}[\]]/g, " ");
+  return { line, kind: "raw", excerpt: searchExcerpt(readable, query) };
+}
+
+function ripgrepMatches(root: string, query: string): Promise<Map<string, SessionSearchMatch[]>> {
   return new Promise((resolvePromise, reject) => {
-    const process = spawn("rg", ["--files-with-matches", "--fixed-strings", "--ignore-case", "--glob", "*.jsonl", "--", query, root], {
+    const escaped = query.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+    const pattern = `.{0,120}${escaped}.{0,160}`;
+    const process = spawn("rg", ["--json", "--ignore-case", "--only-matching", "--max-count", "3", "--sortr", "path", "--glob", "*.jsonl", "--", pattern, root], {
       stdio: ["ignore", "pipe", "pipe"],
     });
+    const results = new Map<string, SessionSearchMatch[]>();
     let stdout = "";
     let stderr = "";
+    let stoppedEarly = false;
+
+    const accept = (line: string) => {
+      if (!line) return;
+      try {
+        const message = JSON.parse(line) as {
+          type?: string;
+          data?: { path?: { text?: string }; lines?: { text?: string }; line_number?: number };
+        };
+        if (message.type !== "match") return;
+        const path = message.data?.path?.text;
+        const rawLine = message.data?.lines?.text;
+        const lineNumber = message.data?.line_number;
+        if (!path || !rawLine || !lineNumber) return;
+        if (!results.has(path) && results.size >= 100) {
+          stoppedEarly = true;
+          process.kill("SIGTERM");
+          return;
+        }
+        const matches = results.get(path) ?? [];
+        if (matches.length < 3) matches.push(sessionSearchMatch(rawLine.trim(), lineNumber, query));
+        results.set(path, matches);
+      } catch {
+        // Ignore malformed diagnostic lines; valid match records remain usable.
+      }
+    };
+
     const timeout = setTimeout(() => {
       process.kill("SIGTERM");
       reject(new SessionSearchError("Session search exceeded 20 seconds. Try a more specific phrase."));
     }, SEARCH_TIMEOUT_MS);
-    process.stdout.on("data", (chunk) => { if (stdout.length < 2_000_000) stdout += chunk.toString(); });
+    process.stdout.on("data", (chunk) => {
+      stdout += chunk.toString();
+      const lines = stdout.split(/\r?\n/);
+      stdout = lines.pop() ?? "";
+      lines.forEach(accept);
+    });
     process.stderr.on("data", (chunk) => { if (stderr.length < 20_000) stderr += chunk.toString(); });
     process.on("error", (error) => {
       clearTimeout(timeout);
@@ -301,8 +383,8 @@ function ripgrepFiles(root: string, query: string): Promise<string[]> {
     });
     process.on("close", (code) => {
       clearTimeout(timeout);
-      if (code === 0) resolvePromise(stdout.split(/\r?\n/).filter(Boolean));
-      else if (code === 1) resolvePromise([]);
+      accept(stdout);
+      if (code === 0 || code === 1 || stoppedEarly) resolvePromise(results);
       else reject(new SessionSearchError(stderr.trim() || `Session search exited with code ${code}.`));
     });
   });
@@ -357,12 +439,16 @@ export class SessionRepository {
     return catalog;
   }
 
-  async search(query: string): Promise<SessionSummary[]> {
+  async search(query: string): Promise<SessionSearchResult[]> {
     const needle = query.trim();
     if (!needle) return [];
-    const matches = await ripgrepFiles(this.root, needle);
-    return matches
-      .map((absolutePath) => summary(this.root, relative(this.root, absolutePath)))
+    const matches = await ripgrepMatches(this.root, needle);
+    const priority: Record<SessionSearchMatch["kind"], number> = { user: 0, assistant: 1, tool: 2, metadata: 3, raw: 4 };
+    return [...matches.entries()]
+      .map(([absolutePath, context]) => ({
+        ...summary(this.root, relative(this.root, absolutePath)),
+        matches: context.sort((left, right) => priority[left.kind] - priority[right.kind] || left.line - right.line),
+      }))
       .sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path))
       .slice(0, 100);
   }

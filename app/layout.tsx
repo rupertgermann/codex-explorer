@@ -7,7 +7,7 @@ const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-geist-mono" });
 
 export const metadata: Metadata = {
   title: "Codex Explorer",
-  description: "Explore local Codex databases and Markdown memory.",
+  description: "Search and explore local Codex databases, Memory, and session history.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

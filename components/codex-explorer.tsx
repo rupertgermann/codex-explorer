@@ -49,6 +49,7 @@ import { Input } from "@/components/ui/input";
 import { MemoryWorkspace } from "@/components/memory-workspace";
 import { UsageWorkspace } from "@/components/usage-workspace";
 import { SessionWorkspace } from "@/components/session-workspace";
+import { UnifiedSearch } from "@/components/unified-search";
 import { cn, formatBytes, formatDate, formatNumber } from "@/lib/utils";
 import { type Workspace, WORKSPACE_COOKIE_NAME } from "@/lib/workspace";
 
@@ -127,6 +128,7 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
         <div><p className="font-semibold tracking-tight">Codex Explorer</p><p className="text-[11px] text-slate-400">Local data intelligence</p></div>
       </div>
       <div className="space-y-1 border-b border-white/10 p-3">
+        <button onClick={() => onWorkspaceChange("search")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "search" ? "bg-indigo-400/15 text-indigo-100" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Search className="size-4" /><span className="flex-1 text-left">Search everything</span><kbd className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">⌘K</kbd></button>
         <button onClick={() => onWorkspaceChange("memory")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "memory" ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Brain className="size-4" />Markdown memory</button>
         <button onClick={() => onWorkspaceChange("sessions")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "sessions" ? "bg-violet-400/10 text-violet-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><MessageSquareText className="size-4" />Session archive</button>
         <button onClick={() => onWorkspaceChange("usage")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "usage" ? "bg-emerald-400/10 text-emerald-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><BarChart3 className="size-4" />Usage report</button>
@@ -378,12 +380,29 @@ export function CodexExplorer({ initialWorkspace }: { initialWorkspace: Workspac
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [memoryTarget, setMemoryTarget] = useState<string>();
+  const [sessionTarget, setSessionTarget] = useState<{ path: string; query: string }>();
+  const [memoryDirty, setMemoryDirty] = useState(false);
+  const [searchMounted, setSearchMounted] = useState(initialWorkspace === "search");
 
   const selectWorkspace = useCallback((next: Workspace) => {
+    if (next !== workspace && workspace === "memory" && memoryDirty && !window.confirm("Discard the unsaved changes in this memory file?")) return;
+    if (next === "search") setSearchMounted(true);
     setWorkspace(next);
     document.cookie = `${WORKSPACE_COOKIE_NAME}=${next}; Path=/; Max-Age=31536000; SameSite=Lax`;
     setMobileMenu(false);
-  }, []);
+  }, [memoryDirty, workspace]);
+
+  useEffect(() => {
+    const openSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") {
+        event.preventDefault();
+        selectWorkspace("search");
+      }
+    };
+    window.addEventListener("keydown", openSearch);
+    return () => window.removeEventListener("keydown", openSearch);
+  }, [selectWorkspace]);
 
   const loadCatalog = useCallback(async () => {
     setLoading(true); setError("");
@@ -417,15 +436,16 @@ export function CodexExplorer({ initialWorkspace }: { initialWorkspace: Workspac
       <Sidebar databases={databases} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setTab("overview"); }} filter={filter} setFilter={setFilter} workspace={workspace} onWorkspaceChange={selectWorkspace} />
       <main className="min-h-screen lg:ml-[272px]">
         <div className="px-4 pt-4 sm:px-6 lg:hidden"><Button variant="outline" size="sm" aria-label="Choose workspace" onClick={() => setMobileMenu((value) => !value)}><Menu className="size-4" />Modules</Button></div>
-        {mobileMenu && <div className="space-y-2 border-b bg-white p-3 lg:hidden"><div className="grid grid-cols-4 gap-2"><Button variant={workspace === "memory" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("memory")}><Brain className="size-3.5" /><span className="hidden sm:inline">Memory</span></Button><Button variant={workspace === "sessions" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("sessions")}><MessageSquareText className="size-3.5" /><span className="hidden sm:inline">Sessions</span></Button><Button aria-label="Usage report" variant={workspace === "usage" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("usage")}><BarChart3 className="size-3.5" /><span className="hidden sm:inline">Usage</span></Button><Button variant={workspace === "databases" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("databases")}><Database className="size-3.5" /><span className="hidden sm:inline">Databases</span></Button></div>{workspace === "databases" && <select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setMobileMenu(false); }} className="h-10 w-full rounded-lg border bg-white px-3 text-sm">{databases.map((item) => <option key={item.id} value={item.id}>{item.group} / {item.name}</option>)}</select>}</div>}
+        {mobileMenu && <div className="space-y-2 border-b bg-white p-3 lg:hidden"><div className="grid grid-cols-2 gap-2 sm:grid-cols-5"><Button aria-label="Search" variant={workspace === "search" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("search")}><Search className="size-3.5" /><span className="hidden sm:inline">Search</span></Button><Button variant={workspace === "memory" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("memory")}><Brain className="size-3.5" /><span className="hidden sm:inline">Memory</span></Button><Button variant={workspace === "sessions" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("sessions")}><MessageSquareText className="size-3.5" /><span className="hidden sm:inline">Sessions</span></Button><Button aria-label="Usage report" variant={workspace === "usage" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("usage")}><BarChart3 className="size-3.5" /><span className="hidden sm:inline">Usage</span></Button><Button variant={workspace === "databases" ? "default" : "outline"} size="sm" onClick={() => selectWorkspace("databases")}><Database className="size-3.5" /><span className="hidden sm:inline">Databases</span></Button></div>{workspace === "databases" && <select value={selectedId} onChange={(event) => { setSelectedId(event.target.value); setMobileMenu(false); }} className="h-10 w-full rounded-lg border bg-white px-3 text-sm">{databases.map((item) => <option key={item.id} value={item.id}>{item.group} / {item.name}</option>)}</select>}</div>}
         <div className="px-4 py-6 sm:px-6 lg:px-8 lg:py-8">
-          {workspace === "memory" ? <MemoryWorkspace /> : workspace === "sessions" ? <SessionWorkspace /> : workspace === "usage" ? <UsageWorkspace /> : error ? <EmptyState title="Could not open Codex data" description={error} /> : !database ? <LoadingState label="Discovering SQLite stores" /> : <>
+          {searchMounted && <div className={workspace === "search" ? "" : "hidden"}><UnifiedSearch active={workspace === "search"} databases={databases} onOpenMemory={(path) => { setMemoryTarget(path); selectWorkspace("memory"); }} onOpenSession={(path, query) => { setSessionTarget({ path, query }); selectWorkspace("sessions"); }} onOpenDatabase={(id) => { setSelectedId(id); setTab("schema"); selectWorkspace("databases"); }} /></div>}
+          {workspace !== "search" && (workspace === "memory" ? <MemoryWorkspace initialPath={memoryTarget} onDirtyChange={setMemoryDirty} /> : workspace === "sessions" ? <SessionWorkspace initialPath={sessionTarget?.path} initialQuery={sessionTarget?.query} /> : workspace === "usage" ? <UsageWorkspace /> : error ? <EmptyState title="Could not open Codex data" description={error} /> : !database ? <LoadingState label="Discovering SQLite stores" /> : <>
             <div className="mb-6 space-y-4"><div className="flex items-start justify-between gap-4"><div><div className="mb-2 flex items-center gap-2"><Badge variant="secondary">{database.group}</Badge><span className="text-xs text-muted-foreground">Updated {formatDate(database.modifiedAt)}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">{database.name}</h1><p className="mt-1 max-w-2xl text-sm text-muted-foreground">Explore records, inspect schema, and analyze this local Codex store without changing it.</p></div><Button variant="outline" size="sm" className="shrink-0" onClick={loadCatalog} disabled={loading} aria-label="Refresh database catalog"><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh</Button></div><div className="flex w-fit max-w-full flex-wrap gap-1 rounded-xl border bg-white p-1 shadow-sm">{tabs.map((item) => <button key={item.id} onClick={() => setTab(item.id)} className={cn("flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium transition", tab === item.id ? "bg-[#17202d] text-white shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground")}><item.icon className="size-3.5" />{item.label}</button>)}</div></div>
             {tab === "overview" && <Overview key={`${database.id}-${refreshKey}`} database={database} />}
             {tab === "browser" && <TableBrowser key={database.id} database={database} />}
             {tab === "query" && <QueryLab key={database.id} database={database} />}
             {tab === "schema" && <SchemaView database={database} />}
-          </>}
+          </>)}
         </div>
       </main>
     </div>

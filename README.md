@@ -12,6 +12,7 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 - Browses tables with pagination, search, sorting, and expanded row details
 - Runs guarded `SELECT`, `WITH`, and `EXPLAIN QUERY PLAN` statements
 - Exports query results to CSV
+- Searches Memory, complete session contents, and database schemas from one keyboard-accessible workspace, with contextual matches that open in place
 - Discovers every Markdown file under `~/.codex/memories`
 - Analyzes corpus size, structure, directories, and frequent terms
 - Searches all memory content with file and line-level matches

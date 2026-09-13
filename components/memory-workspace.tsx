@@ -65,14 +65,16 @@ async function memoryRequest<T>(url: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-async function memorySnapshot(includeInitialDocument: boolean) {
+async function memorySnapshot(includeInitialDocument: boolean, initialPath?: string) {
   const catalog = await memoryRequest<MemoryCatalog>("/api/memory");
-  if (!includeInitialDocument) return { catalog, document: null };
-  const initial = catalog.files.find((file) => file.path === "MEMORY.md") ?? catalog.files[0];
+  if (!includeInitialDocument) return { catalog, document: null, missingInitialPath: "" };
+  const initial = initialPath
+    ? catalog.files.find((file) => file.path === initialPath)
+    : catalog.files.find((file) => file.path === "MEMORY.md") ?? catalog.files[0];
   const document = initial
     ? await memoryRequest<MemoryDocument>(`/api/memory/document?path=${encodeURIComponent(initial.path)}`)
     : null;
-  return { catalog, document };
+  return { catalog, document, missingInitialPath: initialPath && !initial ? initialPath : "" };
 }
 
 function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof Brain }) {
@@ -104,7 +106,7 @@ function MarkdownPreview({ content, onForgetLine }: { content: string; onForgetL
   );
 }
 
-export function MemoryWorkspace() {
+export function MemoryWorkspace({ initialPath, onDirtyChange }: { initialPath?: string; onDirtyChange?: (dirty: boolean) => void }) {
   const [catalog, setCatalog] = useState<MemoryCatalog | null>(null);
   const [document, setDocument] = useState<MemoryDocument | null>(null);
   const [editedContent, setEditedContent] = useState("");
@@ -133,6 +135,9 @@ export function MemoryWorkspace() {
 
   const dirty = document !== null && editedContent !== document.content;
 
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
   const loadDocument = useCallback(async (path: string, force = false) => {
     if (!force && dirty && !window.confirm("Discard the unsaved changes in this memory file?")) return;
     setDocumentLoading(true); setMessage(null);
@@ -159,17 +164,18 @@ export function MemoryWorkspace() {
   }, [document]);
 
   useEffect(() => {
-    memorySnapshot(true)
+    memorySnapshot(true, initialPath)
       .then((next) => {
         setCatalog(next.catalog);
         if (next.document) {
           setDocument(next.document);
           setEditedContent(next.document.content);
         }
+        if (next.missingInitialPath) setMessage({ kind: "error", text: `${next.missingInitialPath} no longer exists. Refresh search and try again.` });
       })
       .catch((error) => setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not load Codex memory." }))
       .finally(() => setLoading(false));
-  }, []);
+  }, [initialPath]);
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); };
@@ -343,7 +349,7 @@ export function MemoryWorkspace() {
       {message && <div className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
 
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_280px]">
-        <Card className="min-w-0 overflow-hidden lg:fixed lg:bottom-0 lg:left-0 lg:top-[209px] lg:z-40 lg:flex lg:w-[272px] lg:flex-col lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-white/10 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
+        <Card className="min-w-0 overflow-hidden lg:fixed lg:bottom-0 lg:left-0 lg:top-[245px] lg:z-40 lg:flex lg:w-[272px] lg:flex-col lg:rounded-none lg:border-x-0 lg:border-b-0 lg:border-white/10 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
           <CardHeader className="border-b p-4 lg:border-white/10"><CardTitle className="text-sm">Memory files</CardTitle><CardDescription>Every Markdown file under the memory root</CardDescription><div className="relative pt-2"><Search className="absolute left-3 top-[26px] size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search all contents…" className="sidebar-form-border pl-9 pr-8 lg:bg-white/[0.06] lg:text-white lg:placeholder:text-slate-500" />{query && <button onClick={() => setQuery("")} className="absolute right-3 top-[26px] -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div>{!query && <select value={directory} onChange={(event) => setDirectory(event.target.value)} className="sidebar-form-border mt-2 h-8 w-full rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All directories ({catalog.files.length})</option>{catalog.directories.map((item) => <option key={item} value={item}>{item} ({directoryCounts[item]})</option>)}</select>}</CardHeader>
           <CardContent className="scrollbar-thin max-h-[680px] overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1">
             {searchResults !== null ? searchResults.length === 0 ? <p className="p-5 text-center text-xs text-muted-foreground">No matches for “{query}”.</p> : <div className="space-y-1">{searchResults.map((result) => <button key={result.path} onClick={() => loadDocument(result.path)} className={cn("w-full rounded-lg border p-3 text-left transition hover:border-indigo-200 hover:bg-indigo-50/40 lg:border-white/10 lg:hover:border-cyan-300/20 lg:hover:bg-white/[0.06]", document?.path === result.path && "border-indigo-300 bg-indigo-50 lg:border-cyan-300/20 lg:bg-cyan-400/10 lg:text-cyan-100")}><span className="flex items-start justify-between gap-2"><span className="min-w-0"><span className="block truncate text-xs font-semibold">{result.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{result.path}</span></span><Badge variant="secondary">{result.matchCount}</Badge></span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block border-l-2 border-indigo-200 pl-2 text-[10px] leading-4 text-muted-foreground lg:border-cyan-300/20"><b className="mr-1 text-indigo-500 lg:text-cyan-300">L{match.line}</b>{match.excerpt}</span>)}</button>)}</div> : <div className="space-y-1">{visibleFiles.map((file) => <button key={file.path} onClick={() => loadDocument(file.path)} className={cn("flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-muted lg:hover:bg-white/[0.06]", document?.path === file.path && "bg-indigo-50 text-indigo-900 lg:bg-cyan-400/10 lg:text-cyan-100")}><span className={cn("grid size-8 shrink-0 place-items-center rounded-lg", document?.path === file.path ? "bg-indigo-100 text-indigo-700 lg:bg-cyan-400/10 lg:text-cyan-300" : "bg-muted text-muted-foreground lg:bg-white/[0.06]")}><FileText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-medium">{file.title}</span><span className="block truncate font-mono text-[9px] text-muted-foreground">{file.path}</span></span><span className="text-[9px] tabular-nums text-muted-foreground">{formatBytes(file.size)}</span></button>)}</div>}
