@@ -30,7 +30,9 @@ A local Next.js interface for exploring the OpenAI Codex CLI's SQLite databases,
 
 ## Usage report
 
-Open **Usage report**, choose the start and end in your local timezone, then press **Generate report**. The end is exclusive. Scanning is explicit and cancellable; changing model, effort or speed filters reuses the loaded telemetry. Session rows show their own filtered usage, with model breakdowns and one-hour or six-hour windows. CSV exports use UTC timestamps.
+Open **Usage report** to see the last successfully generated report automatically, including after a page reload or app restart. If no report exists, choose the start and end in your local timezone and press **Generate report**. To include new telemetry, adjust the period as needed and press **Regenerate report**. The end is exclusive. Scanning is explicit and cancellable; the previous report remains available during generation and after a failed or cancelled scan. Changing model, effort or speed filters reuses the saved telemetry. Session rows show their own filtered usage, with model breakdowns and one-hour or six-hour windows. CSV exports use UTC timestamps.
+
+The latest successful telemetry is stored atomically in the gitignored `.cache/usage-reports/` directory, separately for each configured Codex home and pair of session roots. Session and Memory sources remain unchanged; cached telemetry stays on your machine.
 
 The report adapts the counting, active intervals, quota ledger and SVG chart from `codex-insights-2026-09-10-1013` (`extract_usage.py`, `build_report.py`, `quota_analysis.py`, `usage-chart.js`) into the app's TypeScript runtime. It requires no Python process, new dependency, copied private report data or external source directory at runtime.
 
