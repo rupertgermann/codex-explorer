@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Download, Loader2, Play, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -20,15 +20,35 @@ function ModelTable({ rows }: { rows: Report["models"] }) {
 }
 
 export function UsageWorkspace() {
-  const [since] = useState(() => { const date = new Date(); date.setDate(date.getDate() - 7); date.setHours(0, 0, 0, 0); return localInput(date.getTime() / 1000); });
-  const [until] = useState(() => localInput(Math.ceil(Date.now() / 60000) * 60));
+  const [since, setSince] = useState(() => { const date = new Date(); date.setDate(date.getDate() - 7); date.setHours(0, 0, 0, 0); return localInput(date.getTime() / 1000); });
+  const [until, setUntil] = useState(() => localInput(Math.ceil(Date.now() / 60000) * 60));
   const [data, setData] = useState<UsageData | null>(null), [loading, setLoading] = useState(false), [error, setError] = useState("");
+  const [restoring, setRestoring] = useState(true);
   const [filter, setFilter] = useState<UsageFilter>({}), [query, setQuery] = useState("");
   const [bucket, setBucket] = useState("codex/10080"), [minimumMinutes, setMinimumMinutes] = useState(10);
   const [sessionId, setSessionId] = useState(""), [hours, setHours] = useState(6), [hideZeros, setHideZeros] = useState(false);
   const [exportKind, setExportKind] = useState("sessions");
   const request = useRef<AbortController | null>(null);
-  useEffect(() => () => request.current?.abort(), []);
+  const showReport = useCallback((body: UsageData) => {
+    setData(body); setSessionId(""); setFilter({});
+    setSince(localInput(body.since)); setUntil(localInput(body.until));
+    const available = new Set(body.snapshots.map(quotaKey));
+    setBucket(available.has("codex/10080") ? "codex/10080" : available.values().next().value ?? "codex/10080");
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController(); request.current = controller;
+    async function restore() {
+      try {
+        const response = await fetch("/api/usage", { cache: "no-store", signal: controller.signal });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error ?? "Could not load the saved usage report.");
+        if (body && !controller.signal.aborted) showReport(body);
+      } catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load the saved usage report."); }
+      finally { if (!controller.signal.aborted) setRestoring(false); }
+    }
+    void restore();
+    return () => request.current?.abort();
+  }, [showReport]);
   const report = useMemo(() => data ? buildUsageReport(data, filter) : null, [data, filter]);
   const quota = useMemo(() => data ? analyzeQuota(data, bucket, minimumMinutes) : null, [data, bucket, minimumMinutes]);
   const options = useMemo(() => data ? {
@@ -51,12 +71,10 @@ export function UsageWorkspace() {
     setLoading(true); setError("");
     try {
       const params = new URLSearchParams({ since: new Date(start).toISOString(), until: new Date(end).toISOString() });
-      const response = await fetch(`/api/usage?${params}`, { cache: "no-store", signal: controller.signal });
+      const response = await fetch(`/api/usage?${params}`, { method: "POST", cache: "no-store", signal: controller.signal });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error ?? "Usage scan failed.");
-      setData(body); setSessionId(""); setFilter({});
-      const available = new Set((body as UsageData).snapshots.map(quotaKey));
-      setBucket(available.has("codex/10080") ? "codex/10080" : available.values().next().value ?? "codex/10080");
+      if (!controller.signal.aborted) showReport(body);
     } catch (reason) { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Could not load usage."); }
     finally { if (request.current === controller) setLoading(false); }
   }
@@ -87,13 +105,13 @@ export function UsageWorkspace() {
   return <div className="space-y-5">
     <div><Badge variant="secondary">Read-only telemetry</Badge><h1 className="mt-2 text-2xl font-semibold tracking-tight sm:text-3xl">Usage report</h1><p className="mt-1 text-sm text-muted-foreground">Token consumption, active time and measured account quota across local sessions and archived sessions.</p></div>
     <Card><CardContent className="p-5"><form className="flex flex-wrap items-end gap-3" onSubmit={e => { e.preventDefault(); void load(new FormData(e.currentTarget)); }}>
-      <label className="text-xs font-medium">Report from<Input type="datetime-local" aria-label="Report from" className="mt-1 w-auto" name="since" defaultValue={since} required /></label>
-      <label className="text-xs font-medium">Report to<Input type="datetime-local" aria-label="Report to" className="mt-1 w-auto" name="until" defaultValue={until} required /></label>
-      <Button type="submit" disabled={loading}>{loading ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}{loading ? "Reading telemetry…" : "Generate report"}</Button>
+      <label className="text-xs font-medium">Report from<Input type="datetime-local" aria-label="Report from" className="mt-1 w-auto" name="since" value={since} onChange={e => setSince(e.target.value)} required /></label>
+      <label className="text-xs font-medium">Report to<Input type="datetime-local" aria-label="Report to" className="mt-1 w-auto" name="until" value={until} onChange={e => setUntil(e.target.value)} required /></label>
+      <Button type="submit" disabled={loading || restoring}>{loading || restoring ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}{restoring ? "Loading saved report…" : loading ? "Reading telemetry…" : data ? "Regenerate report" : "Generate report"}</Button>
       {loading && <Button variant="outline" type="button" onClick={() => { request.current?.abort(); setLoading(false); }}>Cancel</Button>}
-    </form><p className="mt-3 text-xs text-muted-foreground">The archive is scanned only when you generate a report. Dates use your local timezone; the end is exclusive.</p></CardContent></Card>
+    </form><p className="mt-3 text-xs text-muted-foreground">The last successful report is saved locally and loaded automatically. Regenerate to include new data for the selected period. Dates use your local timezone; the end is exclusive.</p></CardContent></Card>
     {error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error}</p>}
-    {!data && !loading && <div className="rounded-xl border border-dashed p-12 text-center text-sm text-muted-foreground">Choose a period and generate the report. All recorded models, efforts and speeds are included by default.</div>}
+    {!data && !loading && !restoring && <div className="rounded-xl border border-dashed p-12 text-center text-sm text-muted-foreground">No saved report yet. Choose a period and generate the report. All recorded models, efforts and speeds are included by default.</div>}
     {data && report && quota && options && <>
       <div className="flex flex-wrap items-end gap-3">{(["model", "effort", "speed"] as const).map(key => <label key={key} className="text-xs font-medium capitalize">{key}<select aria-label={key[0].toUpperCase() + key.slice(1)} value={filter[key] ?? ""} className={fieldClass} onChange={e => { setFilter({ ...filter, [key]: e.target.value }); setSessionId(""); }}><option value="">All {key === "speed" ? "speeds" : `${key}s`}</option>{options[key].map(value => <option key={value} value={value}>{value}</option>)}</select></label>)}
         <label className="text-xs font-medium">Quota bucket<select aria-label="Quota bucket" value={bucket} className={fieldClass} onChange={e => setBucket(e.target.value)}>{options.quotas.length ? options.quotas.map(value => <option key={value} value={value}>{value.replace("/10080", " · weekly").replace("/300", " · 5 hours")}</option>) : <option value={bucket}>No quota readings</option>}</select></label>

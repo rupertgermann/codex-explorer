@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { atomicMemoryWrite } from "./memory.ts";
 import { SessionRepository, scanJsonl } from "./sessions.ts";
 import { TOKEN_FIELDS, dimensionKey, emptyTokens, type ActivityInterval, type Dimensions, type Tokens, type UsageData, type UsageEvent } from "./usage-report.ts";
 
@@ -32,11 +34,37 @@ function tokens(value: unknown): Tokens | null {
 
 type Turn = { start?: number; end?: number; last: number; firstEvent?: number; contexts: (Dimensions & { t: number })[] };
 
+type UsageOptions = { home?: string; roots?: string[]; signal?: AbortSignal };
+
+function usageSource(options: UsageOptions) {
+  const home = resolve(options.home ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"));
+  const roots = [...new Set((options.roots ?? [process.env.CODEX_SESSIONS_DIRECTORY ?? join(home, "sessions"), process.env.CODEX_ARCHIVED_SESSIONS_DIRECTORY ?? join(home, "archived_sessions")]).map(root => resolve(root)))];
+  return { home, roots };
+}
+
+function usageCachePath(options: UsageOptions) {
+  const key = createHash("sha256").update(JSON.stringify(usageSource(options))).digest("hex");
+  return join(process.cwd(), ".cache", "usage-reports", `${key}.json`);
+}
+
+/** The last successful scan persists across module visits and app restarts. */
+export function readCachedUsageData(options: UsageOptions = {}): UsageData | null {
+  const path = usageCachePath(options);
+  return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) as UsageData : null;
+}
+
+export async function generateUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
+  const data = await readUsageData(since, until, options);
+  options.signal?.throwIfAborted();
+  data.generatedAt = Date.now() / 1000;
+  atomicMemoryWrite(usageCachePath(options), JSON.stringify(data));
+  return data;
+}
+
 /** On-demand, read-only scan. Adapted from extract_usage.py and active_intervals(). */
-export async function readUsageData(since: number, until: number, options: { home?: string; roots?: string[]; signal?: AbortSignal } = {}): Promise<UsageData> {
+export async function readUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) throw new Error("Choose a valid start and a later end.");
-  const home = options.home ?? process.env.CODEX_HOME ?? join(homedir(), ".codex");
-  const roots = options.roots ?? [process.env.CODEX_SESSIONS_DIRECTORY ?? join(home, "sessions"), process.env.CODEX_ARCHIVED_SESSIONS_DIRECTORY ?? join(home, "archived_sessions")];
+  const { home, roots } = usageSource(options);
   const names = new Map<string, string>();
   const index = join(home, "session_index.jsonl");
   if (existsSync(index)) for (const line of readFileSync(index, "utf8").split("\n")) {
