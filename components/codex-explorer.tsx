@@ -123,11 +123,11 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
 
   return (
     <aside className="desktop-sidebar fixed inset-y-0 left-0 z-30 flex w-[272px] flex-col border-r border-white/10 bg-[#17202d] text-white">
-      <div className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
+      <div className="flex h-16 shrink-0 items-center gap-3 border-b border-white/10 px-5">
         <div className="grid size-9 place-items-center rounded-xl bg-[#6567f1] shadow-lg shadow-indigo-950/30"><Layers3 className="size-5" /></div>
         <div><p className="font-semibold tracking-tight">Codex Explorer</p><p className="text-[11px] text-slate-400">Local data intelligence</p></div>
       </div>
-      <div className="space-y-1 border-b border-white/10 p-3">
+      <div className="shrink-0 space-y-1 border-b border-white/10 p-3">
         <button onClick={() => onWorkspaceChange("search")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "search" ? "bg-indigo-400/15 text-indigo-100" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Search className="size-4" /><span className="flex-1 text-left">Search everything</span><kbd className="rounded border border-white/10 px-1.5 py-0.5 font-mono text-[9px] text-slate-500">⌘K</kbd></button>
         <button onClick={() => onWorkspaceChange("memory")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "memory" ? "bg-cyan-400/10 text-cyan-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><Brain className="size-4" />Markdown memory</button>
         <button onClick={() => onWorkspaceChange("sessions")} className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-xs font-medium transition", workspace === "sessions" ? "bg-violet-400/10 text-violet-200" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-200")}><MessageSquareText className="size-4" />Session archive</button>
@@ -155,7 +155,7 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
             </div>
           </div>
         ))}
-      </div> : <div className="flex-1" />}
+      </div> : <div id="module-sidebar" className="min-h-0 flex-1" />}
     </aside>
   );
 }
