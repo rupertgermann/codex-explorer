@@ -133,7 +133,7 @@ function Sidebar({ databases, selectedId, onSelect, filter, setFilter, workspace
   }, [databases, filter]);
 
   return (
-    <aside className="aurora-sidebar desktop-sidebar fixed inset-y-0 left-0 z-30 flex w-[232px] flex-col border-r">
+    <aside className="aurora-sidebar desktop-sidebar fixed inset-y-0 left-0 z-30 flex w-[232px] flex-col border-r [@media(width>1680px)]:w-[290px]">
       <div className="flex h-[76px] shrink-0 items-center gap-3 border-b px-4">
         <div className="aurora-logo grid size-9 shrink-0 place-items-center rounded-xl text-white"><Layers3 className="size-5" /></div>
         <div><p className="text-sm font-semibold tracking-tight">Codex Explorer</p><p className="mt-0.5 text-[11px] text-muted-foreground">Private · on this device</p></div>
@@ -454,7 +454,7 @@ export function CodexExplorer({ initialWorkspace }: { initialWorkspace: Workspac
     <div className="min-h-screen">
       <a href="#main-content" className="skip-link">Skip to content</a>
       <Sidebar databases={databases} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); selectTab("overview"); setTableTarget(undefined); }} filter={filter} setFilter={setFilter} workspace={workspace} onWorkspaceChange={selectWorkspace} />
-      <main id="main-content" tabIndex={-1} className="min-h-screen min-w-0 focus-visible:outline-none lg:ml-[232px]" onKeyDown={event => { if (event.key === "Escape" && mobileMenu) { setMobileMenu(false); mobileMenuButton.current?.focus(); } }}>
+      <main id="main-content" tabIndex={-1} className="min-h-screen min-w-0 focus-visible:outline-none lg:ml-[232px] [@media(width>1680px)]:ml-[290px]" onKeyDown={event => { if (event.key === "Escape" && mobileMenu) { setMobileMenu(false); mobileMenuButton.current?.focus(); } }}>
         <div className="sticky top-0 z-30 border-b bg-background/95 px-4 py-3 backdrop-blur sm:px-6 lg:hidden">
           <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-sm font-semibold"><Layers3 className="size-5 text-primary" />Codex Explorer</span><Button ref={mobileMenuButton} variant="outline" size="sm" aria-label="Choose workspace" aria-expanded={mobileMenu} aria-controls="mobile-workspaces" onClick={() => setMobileMenu(value => !value)}>{mobileMenu ? <X className="size-4" /> : <Menu className="size-4" />}{WORKSPACES.find(item => item.id === workspace)?.short}</Button></div>
           {mobileMenu && <div id="mobile-workspaces"><nav aria-label="Workspaces" className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">{WORKSPACES.map(item => <Button key={item.id} aria-label={item.id === "search" ? "Search" : item.label} aria-current={workspace === item.id ? "page" : undefined} variant={workspace === item.id ? "default" : "outline"} className="justify-start" onClick={() => selectWorkspace(item.id)}><item.icon className="size-4" />{item.short}</Button>)}</nav><div className="mt-3 border-t pt-3"><AppearanceControl /></div></div>}
