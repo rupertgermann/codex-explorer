@@ -298,19 +298,34 @@ function searchExcerpt(value: string, query: string) {
   return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
 }
 
+function conversationMessage(record: JsonRecord): { kind: "user" | "assistant"; text: string; phase?: string } | null {
+  const payload = object(record.payload);
+  const phase = string(payload.phase) || undefined;
+  if (record.type === "event_msg" && (payload.type === "user_message" || payload.type === "agent_message")) {
+    const text = string(payload.message);
+    return text ? { kind: payload.type === "user_message" ? "user" : "assistant", text, phase } : null;
+  }
+  if (record.type !== "response_item" || payload.type !== "message" || (payload.role !== "user" && payload.role !== "assistant") || !Array.isArray(payload.content)) return null;
+
+  const kinds = object(payload.internal_chat_message_metadata_passthrough).content_item_kinds;
+  const text = payload.content.flatMap((value, index) => {
+    const part = object(value);
+    const kind = Array.isArray(kinds) ? string(kinds[index]) : "";
+    // User-role records also carry injected workspace context, tagged separately from user input.
+    if (payload.role === "user" && kind && kind !== "unknown" && !kind.startsWith("user.")) return [];
+    return part.type === "input_text" || part.type === "output_text" ? [string(part.text)].filter(Boolean) : [];
+  }).join("\n\n");
+  return text ? { kind: payload.role, text, phase } : null;
+}
+
 function sessionSearchMatch(rawLine: string, line: number, query: string): SessionSearchMatch {
   try {
     const record = JSON.parse(rawLine) as JsonRecord;
     const recordType = string(record.type);
     const payload = object(record.payload);
     const payloadType = string(payload.type);
-    if (recordType === "event_msg" && (payloadType === "user_message" || payloadType === "agent_message")) {
-      return {
-        line,
-        kind: payloadType === "user_message" ? "user" : "assistant",
-        excerpt: searchExcerpt(string(payload.message), query),
-      };
-    }
+    const message = conversationMessage(record);
+    if (message && message.text.toLocaleLowerCase().includes(query.toLocaleLowerCase())) return { line, kind: message.kind, excerpt: searchExcerpt(message.text, query) };
     if (recordType === "response_item" && (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType.endsWith("_call"))) {
       const detail = `${string(payload.name) || payloadType} ${string(payload.arguments) || string(payload.input)}`;
       return { line, kind: "tool", excerpt: searchExcerpt(detail, query) };
@@ -525,15 +540,22 @@ export class SessionRepository {
     let firstTimestamp = base.startedAt;
     let lastTimestamp = base.startedAt;
     let entriesTruncated = false;
+    let previousMessage: { source: string; kind: string; text: string; phase?: string; entry?: SessionEntry } | null = null;
 
-    const addEntry = (entry: Omit<SessionEntry, "id">) => {
+    const flushMessage = () => {
+      if (previousMessage?.entry) onUpdate?.({ type: "entry", entry: previousMessage.entry });
+      previousMessage = null;
+    };
+
+    const addEntry = (entry: Omit<SessionEntry, "id">, emit = true) => {
       if (entries.length >= entryLimit) {
         entriesTruncated = true;
         return;
       }
       const identified = { ...entry, id: `${events}-${entries.length}` };
       entries.push(identified);
-      onUpdate?.({ type: "entry", entry: identified });
+      if (emit) onUpdate?.({ type: "entry", entry: identified });
+      return identified;
     };
 
     const scan = await scanJsonl(absolutePath, Math.min(fileSize, byteLimit), (record) => {
@@ -551,14 +573,25 @@ export class SessionRepository {
         model = string(payload.model) || model;
         effort = string(payload.effort) || effort;
       }
-      if (recordType === "event_msg" && (payloadType === "user_message" || payloadType === "agent_message")) {
-        const message = clipped(string(payload.message), ENTRY_TEXT_LIMIT);
-        if (!message.value) return;
-        const kind = payloadType === "user_message" ? "user" : "assistant";
-        if (kind === "user") userMessages += 1; else assistantMessages += 1;
-        addEntry({ timestamp: at, kind, phase: string(payload.phase) || undefined, text: message.value, truncated: message.truncated || undefined });
+      if (recordType === "turn_context" || (recordType === "event_msg" && payloadType === "task_started")) flushMessage();
+      const message = conversationMessage(record);
+      if (message) {
+        // Some archives mirror a message in both formats; repeated prompts remain separate.
+        if (previousMessage && previousMessage.source !== recordType && previousMessage.kind === message.kind && previousMessage.text === message.text
+          && (!previousMessage.phase || !message.phase || previousMessage.phase === message.phase)) {
+          if (previousMessage.entry && message.phase) previousMessage.entry.phase = message.phase;
+          flushMessage();
+          return;
+        }
+        flushMessage();
+        const text = clipped(message.text, ENTRY_TEXT_LIMIT);
+        if (message.kind === "user") userMessages += 1; else assistantMessages += 1;
+        // Hold one message so its mirrored record can supply phase before streaming it.
+        const entry = addEntry({ timestamp: at, kind: message.kind, phase: message.phase, text: text.value, truncated: text.truncated || undefined }, false);
+        previousMessage = { source: recordType, ...message, entry };
       }
       if (recordType === "response_item" && (payloadType === "function_call" || payloadType === "custom_tool_call" || payloadType.endsWith("_call"))) {
+        flushMessage();
         toolCalls += 1;
         const rawDetail = string(payload.arguments) || string(payload.input);
         const detail = clipped(rawDetail, 1_200);
@@ -574,6 +607,7 @@ export class SessionRepository {
       signal,
       onProgress: (scannedBytes, totalBytes) => onUpdate?.({ type: "progress", scannedBytes, totalBytes }),
     });
+    flushMessage();
 
     const firstUserMessage = entries.find((entry) => entry.kind === "user")?.text ?? "Untitled session";
     const title = firstUserMessage.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 160) || "Untitled session";

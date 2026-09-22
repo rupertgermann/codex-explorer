@@ -92,7 +92,7 @@ test("SQL results and drafts survive navigation and failed runs clear stale timi
   await page.getByRole("button", { name: "Query lab", exact: true }).click();
   await expect(editor).toHaveValue("SELECT 42 AS answer");
   await page.getByRole("button", { name: "Session archive", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Codex Sessions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Session archive" })).toBeVisible();
   await page.getByRole("button", { name: "SQLite databases", exact: true }).click();
   await expect(editor).toHaveValue("SELECT 42 AS answer");
   await editor.fill("SELECT * FROM no_such_table");
@@ -233,7 +233,7 @@ test("session filters, transcript search, and raw viewing survive a workspace vi
   await expect(page.getByText(/Bytes 1–/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Previous raw page" })).toBeDisabled();
   await page.getByRole("button", { name: "Markdown memory", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Codex Memory" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Markdown memory" })).toBeVisible();
   await page.getByRole("button", { name: "Session archive", exact: true }).click();
   await expect(page.getByRole("combobox", { name: "Filter sessions by project" })).toHaveValue("atlas-project");
   await expect(page.getByRole("button", { name: "Raw JSONL", exact: true })).toHaveAttribute("aria-pressed", "true");
@@ -244,7 +244,7 @@ test("session filters, transcript search, and raw viewing survive a workspace vi
 test("mobile workspaces have named navigation, fit the viewport, and expose the database selector", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  for (const [workspace, heading] of [["Markdown memory", "Codex Memory"], ["Session archive", "Codex Sessions"], ["Usage report", "Usage report"], ["SQLite databases", "memories_1"], ["Search", "Search everything"]]) {
+  for (const [workspace, heading] of [["Markdown memory", "Markdown memory"], ["Session archive", "Session archive"], ["Usage report", "Usage report"], ["SQLite databases", "memories_1"], ["Search", "Search everything"]]) {
     await page.getByRole("button", { name: "Choose workspace" }).click();
     await expect(page.getByRole("navigation", { name: "Workspaces" }).getByRole("button")).toHaveCount(5);
     await page.getByRole("navigation", { name: "Workspaces" }).getByRole("button", { name: workspace, exact: true }).click();

@@ -125,6 +125,77 @@ test("reads the human conversation and tool activity from a session", async () =
   ]);
 });
 
+test("reads and streams current response messages without injected context", async () => {
+  const root = sessionRoot();
+  const path = "2026/09/current.jsonl";
+  writeSession(root, path, [
+    { type: "session_meta", payload: { id: "current", cwd: "/work/alpha" } },
+    { type: "response_item", payload: { type: "message", role: "developer", content: [{ type: "input_text", text: "Developer instructions" }] } },
+    { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Injected workspace instructions" }], internal_chat_message_metadata_passthrough: { content_item_kinds: ["agents_md.instructions"] } } },
+    { type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "Current needle prompt" }, { type: "input_text", text: "Injected environment" }, { type: "input_text", text: "Keep this second paragraph." }], internal_chat_message_metadata_passthrough: { content_item_kinds: ["user.text", "environments.environment_context", "user.text"] } } },
+    { type: "response_item", payload: { type: "message", role: "assistant", phase: "commentary", content: [{ type: "output_text", text: "Current needle answer" }] } },
+    { type: "response_item", payload: { type: "function_call", name: "inspect", arguments: "{}" } },
+    { type: "response_item", payload: { type: "message", role: "assistant", phase: "final_answer", content: [{ type: "output_text", text: "Finished." }, { type: "encrypted_content", encrypted_content: "not-readable" }] } },
+    { type: "event_msg", payload: { type: "user_message", message: "A legacy follow-up" } },
+  ]);
+  const repository = new SessionRepository(root);
+  const streamed = [];
+
+  const preview = await repository.read(path);
+  const complete = await repository.scanFull(path, update => { if (update.type === "entry") streamed.push(update.entry); });
+
+  assert.equal(preview.title, "Current needle prompt Keep this second paragraph.");
+  assert.equal(preview.metrics.userMessages, 2);
+  assert.equal(preview.metrics.assistantMessages, 2);
+  assert.equal(preview.metrics.toolCalls, 1);
+  assert.deepEqual(preview.entries.map(entry => [entry.kind, entry.text ?? entry.name, entry.phase]), [
+    ["user", "Current needle prompt\n\nKeep this second paragraph.", undefined],
+    ["assistant", "Current needle answer", "commentary"],
+    ["tool", "inspect", undefined],
+    ["assistant", "Finished.", "final_answer"],
+    ["user", "A legacy follow-up", undefined],
+  ]);
+  assert.deepEqual(complete.entries, preview.entries);
+  assert.deepEqual(streamed, complete.entries);
+  assert.deepEqual(complete.metrics, preview.metrics);
+
+  const results = await repository.search("Current needle answer");
+  assert.equal(results[0].matches[0].kind, "assistant");
+  assert.equal(results[0].matches[0].excerpt, "Current needle answer");
+  const contextMatches = await repository.search("Injected environment");
+  assert.equal(contextMatches[0].matches[0].kind, "raw");
+  assert.match(contextMatches[0].matches[0].excerpt, /Injected environment/);
+});
+
+test("collapses mirrored legacy and response messages without dropping repeated prompts", async () => {
+  const root = sessionRoot();
+  const path = "2026/09/mixed.jsonl";
+  const response = (role, text, phase) => ({ type: "response_item", payload: { type: "message", role, phase, content: [{ type: role === "user" ? "input_text" : "output_text", text }] } });
+  const legacy = (role, message) => ({ type: "event_msg", payload: { type: role === "user" ? "user_message" : "agent_message", message } });
+  writeSession(root, path, [
+    { type: "session_meta", payload: { id: "mixed" } },
+    legacy("user", "Repeat this prompt"), response("user", "Repeat this prompt"),
+    response("assistant", "Working.", "commentary"), legacy("assistant", "Working."),
+    { type: "event_msg", payload: { type: "task_started" } },
+    response("user", "Repeat this prompt"), legacy("user", "Repeat this prompt"),
+    response("user", "Repeat this prompt"), response("user", "Repeat this prompt"),
+    legacy("assistant", "Finished."), response("assistant", "Finished.", "final_answer"),
+  ]);
+  const repository = new SessionRepository(root);
+  const streamed = [];
+
+  const preview = await repository.read(path);
+  const complete = await repository.scanFull(path, update => {
+    if (update.type === "entry") streamed.push(JSON.parse(JSON.stringify(update.entry)));
+  });
+
+  assert.equal(preview.metrics.userMessages, 4);
+  assert.equal(preview.metrics.assistantMessages, 2);
+  assert.deepEqual(preview.entries.filter(entry => entry.kind === "assistant").map(entry => entry.phase), ["commentary", "final_answer"]);
+  assert.deepEqual(complete.entries, preview.entries);
+  assert.deepEqual(streamed, JSON.parse(JSON.stringify(complete.entries)));
+});
+
 test("searches session contents and rejects paths outside the session root", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/match.jsonl", [

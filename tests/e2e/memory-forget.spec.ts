@@ -59,6 +59,7 @@ test("reaches orphan deletion only through the dedicated advanced workflow", asy
   await page.getByRole("button", { name: /rollout_summaries\/orphan\.md/ }).click();
 
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+  await page.getByText("Advanced cleanup", { exact: true }).click();
   await page.getByRole("button", { name: "Delete orphaned file…" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Delete orphaned file?" });

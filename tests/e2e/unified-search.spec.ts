@@ -13,7 +13,7 @@ test("searches every local source and opens each result in context", async ({ pa
 
   await searchForAtlas(page);
   await page.getByRole("button", { name: /Atlas search fixture/ }).click();
-  await expect(page.getByRole("heading", { name: "Codex Memory" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Markdown memory" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Atlas search fixture" })).toBeVisible();
 
   await page.keyboard.press("Meta+k");
@@ -23,7 +23,7 @@ test("searches every local source and opens each result in context", async ({ pa
   await expect(sessionResult).toContainText("Investigate the atlas workflow across all local Codex sources.");
   await expect(sessionResult).toContainText("Assistant · L3");
   await sessionResult.click();
-  await expect(page.getByRole("heading", { name: "Codex Sessions" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Session archive" })).toBeVisible();
   await expect(page.getByText("Investigate the atlas workflow across all local Codex sources.").last()).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Find in selected transcript" })).toHaveValue("atlas");
   await expect(page.getByText("1 of 2 visible matches")).toBeVisible();
@@ -58,7 +58,7 @@ test("protects an unsaved Memory edit when opening global search", async ({ page
 
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.keyboard.press("Meta+k");
-  await expect(page.getByRole("heading", { name: "Codex Memory" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Markdown memory" })).toBeVisible();
 
   page.once("dialog", (dialog) => dialog.accept());
   await page.keyboard.press("Meta+k");

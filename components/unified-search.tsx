@@ -46,20 +46,10 @@ async function searchRequest<T>(url: string, signal: AbortSignal) {
   return data.results;
 }
 
-function ScopeCard({ icon: Icon, title, description }: { icon: typeof Search; title: string; description: string }) {
-  return (
-    <div className="rounded-xl border bg-white p-4">
-      <span className="mb-3 grid size-9 place-items-center rounded-lg bg-indigo-50 text-indigo-600"><Icon className="size-4" /></span>
-      <p className="text-sm font-semibold">{title}</p>
-      <p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p>
-    </div>
-  );
-}
-
 function HighlightedText({ text, query }: { text: string; query: string }) {
   const index = text.toLocaleLowerCase().indexOf(query.toLocaleLowerCase());
   if (index < 0) return text;
-  return <>{text.slice(0, index)}<mark className="rounded bg-amber-200/80 px-0.5 text-inherit">{text.slice(index, index + query.length)}</mark>{text.slice(index + query.length)}</>;
+  return <>{text.slice(0, index)}<mark className="rounded bg-[var(--highlight)] px-0.5 text-foreground">{text.slice(index, index + query.length)}</mark>{text.slice(index + query.length)}</>;
 }
 
 const matchLabels = { user: "User", assistant: "Assistant", tool: "Tool", metadata: "Session", raw: "Raw event" } as const;
@@ -135,18 +125,18 @@ export function UnifiedSearch({
   }
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-5xl space-y-6">
       <div>
-        <div className="mb-2 flex items-center gap-2"><Badge className="border-indigo-200 bg-indigo-50 text-indigo-700"><Sparkles className="size-3" />All local Codex data</Badge><span className="text-xs text-muted-foreground">⌘K or Ctrl-K from anywhere</span></div>
+        <div className="mb-3 flex flex-wrap items-center gap-2"><Badge variant="secondary"><Sparkles className="size-3" />All local Codex data</Badge><span className="hidden text-xs text-muted-foreground sm:inline">⌘K or Ctrl-K to search</span></div>
         <h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Search everything</h1>
-        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">Find a remembered decision, an old conversation, or a SQLite schema without first knowing where Codex stored it.</p>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">Find a decision, a conversation, or a database schema. One search across your local Codex data.</p>
       </div>
 
-      <Card className="overflow-hidden border-indigo-200 shadow-[0_12px_40px_rgba(79,70,229,.08)]">
+      <Card className="overflow-hidden border-ring/30 shadow-[0_8px_32px_#5948ef0a]">
         <form role="search" onSubmit={searchAll}>
           <div className="flex flex-col gap-3 p-4 sm:flex-row sm:p-5">
             <div className="relative min-w-0 flex-1">
-              <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-indigo-500" />
+              <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-accent-foreground" />
               <Input
                 id="global-search"
                 ref={input}
@@ -157,27 +147,27 @@ export function UnifiedSearch({
                 aria-label="Search all Codex data"
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search decisions, prompts, projects, tables…"
-                className="h-12 border-indigo-200 bg-white pl-12 pr-4 text-base shadow-none"
+                placeholder="Search local data…"
+                className="h-12 bg-background pl-12 pr-4 text-base shadow-none"
               />
             </div>
-            <Button type="submit" className="h-12 px-5" disabled={query.trim().length < 3}>
+            <Button type="submit" aria-label="Search everything" className="h-12 px-6" disabled={query.trim().length < 3}>
               {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              Search everything
+              Search
             </Button>
             {searching && <Button type="button" variant="outline" className="h-12" onClick={() => { activeSearch.current?.abort(); setPending([]); setCancelled(true); }}><X className="size-4" />Cancel search</Button>}
           </div>
-          <p className="border-t bg-indigo-50/50 px-5 py-2.5 text-xs leading-5 text-indigo-900/75">Enter at least 3 characters. Results appear as each source finishes; sessions can take up to 20 seconds.</p>
+          <p className="px-5 pb-4 text-xs leading-5 text-muted-foreground">At least 3 characters. Results appear as each source finishes; sessions may take up to 20 seconds.</p>
         </form>
       </Card>
 
-      {(errors.length > 0 || catalogError) && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><p className="flex items-center gap-2 font-semibold"><AlertTriangle className="size-4" />Some sources could not be searched</p>{[...errors, ...(catalogError ? [`Database schema: ${catalogError}`] : [])].map((error) => <p key={error} className="mt-1 text-xs">{error}</p>)}</div>}
+      {(errors.length > 0 || catalogError) && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 px-4 py-3 text-sm text-amber-800 dark:text-amber-200"><p className="flex items-center gap-2 font-semibold"><AlertTriangle className="size-4" />Some sources could not be searched</p>{[...errors, ...(catalogError ? [`Database schema: ${catalogError}`] : [])].map((error) => <p key={error} className="mt-1 text-xs">{error}</p>)}</div>}
 
       {!submittedQuery ? <>
-        <div className="grid gap-3 md:grid-cols-3">
-          <ScopeCard icon={Brain} title="Memory" description="Search every Markdown Memory file and see matching lines in context." />
-          <ScopeCard icon={MessageSquareText} title="Sessions" description="Find any phrase across the complete local conversation archive." />
-          <ScopeCard icon={Database} title="Database schema" description="Locate stores, tables, columns, and indexes by name or type." />
+        <div className="flex flex-wrap justify-center gap-x-6 gap-y-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-2"><Brain className="size-4 text-accent-foreground" />Memory files</span>
+          <span className="flex items-center gap-2"><MessageSquareText className="size-4 text-accent-foreground" />Session archive</span>
+          <span className="flex items-center gap-2"><Database className="size-4 text-accent-foreground" />Database schemas</span>
         </div>
         <p className="text-center text-xs text-muted-foreground">Try an error message, project name, API concept, decision, table, or column.</p>
       </> : <div className="space-y-5">
@@ -189,19 +179,19 @@ export function UnifiedSearch({
         {!searching && !cancelled && !catalogError && totalResults === 0 && errors.length === 0 && <Card><CardContent className="flex min-h-40 flex-col items-center justify-center text-center"><Search className="mb-3 size-8 text-muted-foreground/50" /><p className="font-medium">No local matches</p><p className="mt-1 text-sm text-muted-foreground">Try a shorter phrase, a project name, or a distinctive word.</p></CardContent></Card>}
 
         {memoryResults.length > 0 && <Card className="overflow-hidden">
-          <CardHeader className="border-b bg-cyan-50/40"><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-cyan-700" />Memory <Badge variant="secondary">{memoryResults.length}</Badge></CardTitle><CardDescription>Matching Markdown files with line-level context</CardDescription></CardHeader>
-          <CardContent className="divide-y p-0">{memoryResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenMemory(result.path)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-cyan-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-700"><FileText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-3"><span className="truncate text-sm font-semibold">{result.title}</span><span className="shrink-0 text-[10px] text-muted-foreground">{result.matchCount} {result.matchCount === 1 ? "match" : "matches"}</span></span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.path}</span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block break-words border-l-2 border-cyan-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-cyan-700">L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-cyan-700" /></button>)}</CardContent>
+          <CardHeader className="border-b bg-muted/40"><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-accent-foreground" />Memory <Badge variant="secondary">{memoryResults.length}</Badge></CardTitle><CardDescription>Matching Markdown files with line-level context</CardDescription></CardHeader>
+          <CardContent className="divide-y p-0">{memoryResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenMemory(result.path)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-accent/40"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground"><FileText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-3"><span className="truncate text-sm font-semibold">{result.title}</span><span className="shrink-0 text-[10px] text-muted-foreground">{result.matchCount} {result.matchCount === 1 ? "match" : "matches"}</span></span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.path}</span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block break-words border-l-2 border-ring/40 pl-2 text-xs leading-5 text-secondary-foreground"><b className="mr-1 text-accent-foreground">L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-accent-foreground" /></button>)}</CardContent>
         </Card>}
 
         {sessionResults.length > 0 && <Card className="overflow-hidden">
-          <CardHeader className="border-b bg-violet-50/40"><CardTitle className="flex items-center gap-2 text-sm"><MessageSquareText className="size-4 text-violet-700" />Sessions <Badge variant="secondary">{sessionResults.length}</Badge></CardTitle><CardDescription>Matching conversations with the exact message or event context</CardDescription></CardHeader>
-          <CardContent className="divide-y p-0">{sessionResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenSession(result.path, submittedQuery)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-violet-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-50 text-violet-700"><MessageSquareText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{result.project}</span><Badge variant="outline" className="px-1.5 py-0 text-[9px]">{result.provenance}</Badge></span><span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{result.id} · {formatDate(result.startedAt)} · {formatBytes(result.size)}</span>{result.matches.slice(0, 2).map((match) => <span key={`${match.line}-${match.kind}`} className="mt-2 block break-words border-l-2 border-violet-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-violet-700">{matchLabels[match.kind]} · L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-violet-700" /></button>)}</CardContent>
-          {sessionResults.length === 100 && <p className="border-t bg-violet-50/30 px-4 py-2 text-[10px] text-muted-foreground">Showing the first 100 matching sessions. Use a more specific phrase to narrow the result set.</p>}
+          <CardHeader className="border-b bg-muted/40"><CardTitle className="flex items-center gap-2 text-sm"><MessageSquareText className="size-4 text-accent-foreground" />Sessions <Badge variant="secondary">{sessionResults.length}</Badge></CardTitle><CardDescription>Matching conversations with the exact message or event context</CardDescription></CardHeader>
+          <CardContent className="divide-y p-0">{sessionResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenSession(result.path, submittedQuery)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-accent/40"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground"><MessageSquareText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{result.project}</span><Badge variant="outline" className="px-1.5 py-0 text-[9px]">{result.provenance}</Badge></span><span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{result.id} · {formatDate(result.startedAt)} · {formatBytes(result.size)}</span>{result.matches.slice(0, 2).map((match) => <span key={`${match.line}-${match.kind}`} className="mt-2 block break-words border-l-2 border-ring/40 pl-2 text-xs leading-5 text-secondary-foreground"><b className="mr-1 text-accent-foreground">{matchLabels[match.kind]} · L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-accent-foreground" /></button>)}</CardContent>
+          {sessionResults.length === 100 && <p className="border-t bg-muted/30 px-4 py-2 text-[10px] text-muted-foreground">Showing the first 100 matching sessions. Use a more specific phrase to narrow the result set.</p>}
         </Card>}
 
         {databaseResults.length > 0 && <Card className="overflow-hidden">
-          <CardHeader className="border-b bg-slate-50"><CardTitle className="flex items-center gap-2 text-sm"><Database className="size-4 text-slate-700" />Database schema <Badge variant="secondary">{databaseResults.length}</Badge></CardTitle><CardDescription>Matching stores, tables, columns, and indexes</CardDescription></CardHeader>
-          <CardContent className="divide-y p-0">{databaseResults.map((result) => <button key={result.databaseId} type="button" onClick={() => onOpenDatabase(result.databaseId)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-slate-50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-slate-100 text-slate-700"><Database className="size-4" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{result.name}</span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.relativePath}</span><span className="mt-2 flex flex-wrap gap-1.5">{result.matches.map((match) => <Badge key={match} variant="outline" className="font-mono text-[9px] font-medium">{match}</Badge>)}</span></span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-slate-900" /></button>)}</CardContent>
+          <CardHeader className="border-b bg-muted/40"><CardTitle className="flex items-center gap-2 text-sm"><Database className="size-4 text-accent-foreground" />Database schema <Badge variant="secondary">{databaseResults.length}</Badge></CardTitle><CardDescription>Matching stores, tables, columns, and indexes</CardDescription></CardHeader>
+          <CardContent className="divide-y p-0">{databaseResults.map((result) => <button key={result.databaseId} type="button" onClick={() => onOpenDatabase(result.databaseId)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-muted/40"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-accent text-accent-foreground"><Database className="size-4" /></span><span className="min-w-0 flex-1"><span className="block text-sm font-semibold">{result.name}</span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.relativePath}</span><span className="mt-2 flex flex-wrap gap-1.5">{result.matches.map((match) => <Badge key={match} variant="outline" className="font-mono text-[9px] font-medium">{match}</Badge>)}</span></span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-accent-foreground" /></button>)}</CardContent>
         </Card>}
       </div>}
     </div>

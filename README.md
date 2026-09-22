@@ -6,7 +6,9 @@ A private, local Next.js workspace for exploring Codex data under `~/.codex`: SQ
 
 ## What it does
 
-Five workspaces share responsive navigation, with module-specific controls in the desktop sidebar and inline on mobile. Search is the starting workspace. Your selected workspace is remembered across reloads, and open documents, filters, chart ranges, and SQL drafts stay in place when switching workspaces. Leaving an unsaved Memory edit requires confirmation.
+Five workspaces share responsive navigation, with module-specific controls in the desktop sidebar and collapsible file/session browsers on mobile. Search is the starting workspace. Your selected workspace is remembered across reloads, and open documents, filters, chart ranges, and SQL drafts stay in place when switching workspaces. Leaving an unsaved Memory edit requires confirmation.
+
+The Aurora Studio appearance supports **Light**, **Dark**, and **System** in the sidebar or mobile workspace menu. System follows your device by default; an explicit choice is remembered in this browser and applied before the page appears.
 
 ### Search everything
 
@@ -43,7 +45,7 @@ See the [Memory Forget user guide](docs/memory-forgetting.md) for the individual
 
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
 - Caches the catalog until explicitly refreshed and filters sessions by project, month, and provenance, with a single reset action
-- Browses human messages and tool calls with per-session event analysis
+- Browses human messages and tool calls from current and legacy session formats, excluding explicitly tagged injected context and deduplicating mirrored conversation records
 - Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest; lists reveal more sessions in batches
 - Streams complete transcripts on demand and exposes every file through a bounded, byte-paginated Raw JSONL viewer
 - Searches session contents explicitly with a bounded full-text scan
