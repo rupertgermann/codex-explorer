@@ -6,13 +6,16 @@ A private, local Next.js workspace for exploring Codex data under `~/.codex`: SQ
 
 ## What it does
 
-Five workspaces share responsive navigation, with module-specific controls in the desktop sidebar and inline on mobile. Your selected workspace is remembered across reloads; leaving an unsaved Memory edit requires confirmation.
+Five workspaces share responsive navigation, with module-specific controls in the desktop sidebar and collapsible file/session browsers on mobile. Search is the starting workspace. Your selected workspace is remembered across reloads, and open documents, filters, chart ranges, and SQL drafts stay in place when switching workspaces. Leaving an unsaved Memory edit requires confirmation.
+
+The Aurora Studio appearance supports **Light**, **Dark**, and **System** in the sidebar or mobile workspace menu. System follows your device by default; an explicit choice is remembered in this browser and applied before the page appears.
 
 ### Search everything
 
 - Opens with **⌘K** on macOS or **Ctrl+K** elsewhere
 - Searches Markdown Memory, complete session contents, and database schemas in one submitted search
-- Shows line-level context and highlighted session matches, then opens the matching Memory document, session, or database schema in place
+- Shows line-level context and highlighted matches, then opens the matching Memory document, session, or database schema in place
+- Displays results as each source finishes; cancellation keeps the results already found
 - Keeps the query and results when switching workspaces; reports source-specific failures without hiding successful results
 - Searches database, table, column, type, and index metadata, not database row contents; use the table browser or Query lab for records
 
@@ -21,16 +24,17 @@ Five workspaces share responsive navigation, with module-specific controls in th
 - Discovers SQLite stores in `~/.codex` and `~/.codex/sqlite`
 - Adapts to schema changes through live table, column, index, and foreign-key discovery
 - Adds focused analytics for logs, threads, memories, goals, and automations
-- Browses tables with pagination, search, sorting, and expanded row details
+- Opens tables directly from the inventory, with pagination, search, sorting, and keyboard-accessible row details
 - Runs guarded `SELECT`, `WITH`, and `EXPLAIN QUERY PLAN` statements
-- Exports query results to CSV
+- Offers query templates for the discovered columns, with a generic preview for older schemas
+- Exports query results to spreadsheet-safe, UTF-8, semicolon-separated CSV
 
 ### Markdown memory
 
 - Discovers every Markdown file under `~/.codex/memories`
-- Analyzes corpus size, structure, directories, and frequent terms
+- Shows compact corpus and directory counts alongside the file browser
 - Searches all memory content with file and line-level matches
-- Edits Markdown with a GFM preview, stale-revision detection, and atomic replacement
+- Edits Markdown with a GFM preview, **⌘S** / **Ctrl+S** to save, confirmed discard, stale-revision detection, and atomic replacement
 - Previews and applies one confirmed Memory Forget plan, with affected-section review, confirmation of uncertain source matches, verified external backups, runtime rollback, a delete tombstone, and manual resurfacing checks
 - Previews and applies **Forget project…** for one directory and its descendants, with exact directory confirmation, removal of matching active Memory database rows, verified external backups, coordinated Markdown/SQLite rollback, retained shared Memories, and a verified result
 - Inspects dependencies before deleting one explicitly confirmed orphaned non-core Memory file, with revision revalidation and a verified external backup
@@ -40,9 +44,9 @@ See the [Memory Forget user guide](docs/memory-forgetting.md) for the individual
 ### Session archive
 
 - Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
-- Caches the catalog until explicitly refreshed and filters sessions by project, month, and provenance
-- Browses human messages and tool calls with per-session event analysis
-- Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest
+- Caches the catalog until explicitly refreshed and filters sessions by project, month, and provenance, with a single reset action
+- Browses human messages and tool calls from current and legacy session formats, excluding explicitly tagged injected context and deduplicating mirrored conversation records
+- Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest; lists reveal more sessions in batches
 - Streams complete transcripts on demand and exposes every file through a bounded, byte-paginated Raw JSONL viewer
 - Searches session contents explicitly with a bounded full-text scan
 

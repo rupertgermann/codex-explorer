@@ -26,6 +26,7 @@ test("keeps all five main modules above module navigation", async ({ page }) => 
   await sidebar.getByRole("button", { name: "Markdown memory", exact: true }).click();
   await expect(sidebar.getByPlaceholder("Search all contents…")).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByText("Browse memory files", { exact: true }).click();
   await expect(page.getByRole("main").getByPlaceholder("Search all contents…")).toBeVisible();
   await page.setViewportSize({ width: 1115, height: 700 });
   await expect(sidebar.getByPlaceholder("Search all contents…")).toBeVisible();

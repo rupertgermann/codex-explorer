@@ -11,7 +11,7 @@ test("selects, refreshes and cancels Project Forget while protecting unsaved edi
   await editor.fill(original);
   await page.getByRole("button", { name: "Forget project…" }).click();
   const dialog = page.getByRole("dialog", { name: "Forget project…" });
-  const directory = dialog.getByLabel("Project directory");
+  const directory = dialog.getByLabel("Project directory", { exact: true });
   await expect(directory).toBeEnabled();
   await expect(dialog.locator('datalist option[value="/work/app"]')).toHaveCount(1);
   await directory.fill("/work/app");
@@ -59,6 +59,7 @@ test("reaches orphan deletion only through the dedicated advanced workflow", asy
   await page.getByRole("button", { name: /rollout_summaries\/orphan\.md/ }).click();
 
   await expect(page.getByRole("button", { name: "Delete", exact: true })).toHaveCount(0);
+  await page.getByText("Advanced cleanup", { exact: true }).click();
   await page.getByRole("button", { name: "Delete orphaned file…" }).click();
 
   const dialog = page.getByRole("dialog", { name: "Delete orphaned file?" });
@@ -100,5 +101,5 @@ test("applies a Project Forget plan after exact directory confirmation and shows
   await expect(dialog.getByText(/^Backup:/)).toBeVisible();
   await expect(dialog.getByText(/^Tombstone:/)).toBeVisible();
   await dialog.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(page.getByText("Preserve accessible keyboard navigation.", { exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Memory preview" }).getByRole("listitem").filter({ hasText: "Preserve accessible keyboard navigation." })).toBeVisible();
 });

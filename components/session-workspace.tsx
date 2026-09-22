@@ -1,30 +1,25 @@
 "use client";
 
-import { ModuleSidebar } from "@/components/module-sidebar";
+import { ModuleSidebar, ModuleSidebarTrigger } from "@/components/module-sidebar";
 
-import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
   Braces,
-  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  FileJson2,
-  Folder,
   GitBranch,
-  HardDrive,
   Loader2,
   List,
   MessageSquareText,
   RefreshCw,
   ScanText,
   Search,
-  Terminal,
   User,
   Wrench,
   X,
@@ -145,35 +140,24 @@ const provenanceLabels: Record<SessionProvenance, string> = {
 
 function ProvenanceBadge({ provenance }: { provenance: SessionProvenance }) {
   return <Badge variant="outline" className={cn(
-    "shrink-0 px-1.5 py-0 text-[9px]",
-    provenance === "user" && "border-emerald-200 bg-emerald-50 text-emerald-700",
-    provenance === "codex" && "border-violet-200 bg-violet-50 text-violet-700",
-    provenance === "automation" && "border-amber-200 bg-amber-50 text-amber-700",
-    provenance === "unknown" && "border-slate-200 bg-slate-50 text-slate-600",
+    "shrink-0 px-1.5 py-0 text-[10px]",
+    provenance === "user" && "border-emerald-200 bg-emerald-50 dark:border-emerald-400/25 dark:bg-emerald-400/10 text-emerald-700 dark:text-emerald-300",
+    provenance === "codex" && "border-primary/20 bg-accent text-accent-foreground",
+    provenance === "automation" && "border-amber-200 bg-amber-50 dark:border-amber-400/25 dark:bg-amber-400/10 text-amber-700 dark:text-amber-300",
+    provenance === "unknown" && "border-border bg-muted text-muted-foreground",
   )}>{provenanceLabels[provenance]}</Badge>;
-}
-
-function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof HardDrive }) {
-  return (
-    <Card>
-      <CardContent className="flex items-start justify-between p-4">
-        <div><p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p><p className="mt-1.5 text-xl font-semibold tracking-[-0.03em]">{value}</p><p className="mt-1 text-[11px] text-muted-foreground">{detail}</p></div>
-        <span className="rounded-lg bg-violet-50 p-2 text-violet-700"><Icon className="size-4" /></span>
-      </CardContent>
-    </Card>
-  );
 }
 
 function transcriptEntryText(entry: SessionEntry) {
   return entry.kind === "tool" ? `${entry.name ?? ""} ${entry.detail ?? ""}` : entry.text ?? "";
 }
 
-function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boolean }) {
+const TranscriptEntry = memo(function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boolean }) {
   if (entry.kind === "tool") {
     return (
-      <div id={`session-entry-${entry.id}`} className={cn("ml-8 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 scroll-mt-4", matched && "border-amber-300 bg-amber-50/70 ring-2 ring-amber-200/70")}>
-        <div className="flex items-center justify-between gap-3"><span className="flex min-w-0 items-center gap-2 text-xs font-medium"><Wrench className="size-3.5 shrink-0 text-slate-500" /><span className="truncate font-mono">{entry.name}</span>{matched && <Badge className="border-amber-200 bg-amber-100 px-1.5 py-0 text-[9px] text-amber-800">match</Badge>}</span><time className="shrink-0 text-[10px] text-muted-foreground">{formatDate(entry.timestamp)}</time></div>
-        {entry.detail && <details className="mt-2"><summary className="cursor-pointer text-[10px] font-medium text-muted-foreground">Show call input{entry.truncated ? " (truncated)" : ""}</summary><pre className="scrollbar-thin mt-2 max-h-48 overflow-auto rounded-lg bg-[#17202d] p-3 font-mono text-[10px] leading-5 text-slate-300">{entry.detail}</pre></details>}
+      <div id={`session-entry-${entry.id}`} className={cn("ml-0 scroll-mt-4 rounded-xl border bg-muted/40 px-4 py-3 sm:ml-11", matched && "border-amber-300 bg-amber-50/70 ring-2 ring-amber-200/70 dark:border-amber-400/40 dark:bg-amber-400/10 dark:ring-amber-400/20")}>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1"><span className="flex min-w-0 items-center gap-2 text-xs font-medium"><Wrench className="size-3.5 shrink-0 text-muted-foreground" /><span className="truncate font-mono">{entry.name}</span>{matched && <Badge className="border-amber-200 bg-amber-100 dark:border-amber-400/25 dark:bg-amber-400/15 px-1.5 py-0 text-[10px] text-amber-800 dark:text-amber-200">match</Badge>}</span><time className="shrink-0 text-[11px] text-muted-foreground">{formatDate(entry.timestamp)}</time></div>
+        {entry.detail && <details className="mt-2"><summary className="cursor-pointer text-[11px] font-medium text-muted-foreground">Show call input{entry.truncated ? " (truncated)" : ""}</summary><pre tabIndex={0} className="scrollbar-thin mt-2 max-h-48 overflow-auto rounded-lg border bg-background p-3 font-mono text-[11px] leading-5 text-foreground">{entry.detail}</pre></details>}
       </div>
     );
   }
@@ -181,15 +165,15 @@ function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boo
   const assistant = entry.kind === "assistant";
   return (
     <div id={`session-entry-${entry.id}`} className={cn("flex scroll-mt-4 gap-3", !assistant && "flex-row-reverse")}>
-      <span className={cn("mt-1 grid size-8 shrink-0 place-items-center rounded-lg", assistant ? "bg-violet-100 text-violet-700" : "bg-indigo-600 text-white")}>{assistant ? <Bot className="size-4" /> : <User className="size-4" />}</span>
-      <div className={cn("min-w-0 max-w-[88%] rounded-2xl border px-4 py-3", assistant ? "border-slate-200 bg-white" : "border-indigo-600 bg-indigo-50", matched && "border-amber-300 bg-amber-50/70 ring-2 ring-amber-200/70")}>
-        <div className="mb-2 flex items-center justify-between gap-4"><span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{assistant ? entry.phase === "final_answer" ? "Assistant · final" : "Assistant" : "User"}{matched && <Badge className="border-amber-200 bg-amber-100 px-1.5 py-0 text-[9px] normal-case tracking-normal text-amber-800">match</Badge>}</span><time className="text-[10px] text-muted-foreground">{formatDate(entry.timestamp)}</time></div>
-        <div className="memory-markdown text-xs leading-6 text-slate-700"><ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text}</ReactMarkdown></div>
-        {entry.truncated && <p className="mt-2 text-[10px] font-medium text-amber-700">Long message truncated for display.</p>}
+      <span className={cn("mt-1 hidden size-8 shrink-0 place-items-center rounded-lg sm:grid", assistant ? "bg-accent text-accent-foreground" : "bg-primary text-primary-foreground")}>{assistant ? <Bot className="size-4" /> : <User className="size-4" />}</span>
+      <div className={cn("min-w-0 flex-1 rounded-2xl border px-4 py-3 sm:flex-initial sm:max-w-[88%]", assistant ? "border-border bg-card" : "border-primary/20 bg-accent/60", matched && "border-amber-300 bg-amber-50/70 ring-2 ring-amber-200/70 dark:border-amber-400/40 dark:bg-amber-400/10 dark:ring-amber-400/20")}>
+        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1"><span className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{assistant ? entry.phase === "final_answer" ? "Assistant · final" : "Assistant" : "User"}{matched && <Badge className="border-amber-200 bg-amber-100 dark:border-amber-400/25 dark:bg-amber-400/15 px-1.5 py-0 text-[10px] normal-case tracking-normal text-amber-800 dark:text-amber-200">match</Badge>}</span><time className="text-[11px] text-muted-foreground">{formatDate(entry.timestamp)}</time></div>
+        <div className="memory-markdown text-[13px] leading-6 text-foreground"><ReactMarkdown remarkPlugins={[remarkGfm]}>{entry.text}</ReactMarkdown></div>
+        {entry.truncated && <p className="mt-2 text-[11px] font-medium text-amber-700 dark:text-amber-300">Long message truncated for display.</p>}
       </div>
     </div>
   );
-}
+});
 
 function ThreadTreeItem({
   node,
@@ -210,21 +194,21 @@ function ThreadTreeItem({
   const open = node.contextOnly ? !expanded.has(expansionKey) : expanded.has(expansionKey);
   const hasChildren = node.children.length > 0;
   return <div>
-    <div className={cn("flex items-stretch rounded-lg transition hover:bg-muted lg:hover:bg-white/[0.06] lg:[&_.text-muted-foreground]:text-slate-400", node.contextOnly && "opacity-55", selectedPath === node.session.path && "bg-violet-50 text-violet-950 opacity-100 lg:bg-violet-400/10 lg:text-violet-100")} style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 4}px` }}>
+    <div className={cn("flex items-stretch rounded-lg transition hover:bg-muted", node.contextOnly && "bg-muted/30", selectedPath === node.session.path && "bg-accent text-accent-foreground")} style={{ paddingLeft: `${Math.min(depth, 8) * 14 + 4}px` }}>
       <button type="button" disabled={!hasChildren} onClick={() => onToggle(expansionKey)} aria-expanded={hasChildren ? open : undefined} aria-label={`${open ? "Collapse" : "Expand"} ${node.session.id}`} className="grid w-7 shrink-0 place-items-center text-muted-foreground disabled:opacity-20">
         {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
       </button>
-      <button type="button" onClick={() => onSelect(node.session.path)} className="min-w-0 flex-1 px-1.5 py-2 text-left">
+      <button type="button" aria-current={selectedPath === node.session.path ? "true" : undefined} onClick={() => onSelect(node.session.path)} className="min-w-0 flex-1 px-1.5 py-2 text-left">
         <span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{node.session.project}</span><ProvenanceBadge provenance={node.session.provenance} /></span>
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5"><span className="truncate font-mono text-[9px] text-muted-foreground">{node.session.id}</span>{node.contextOnly && <span className="shrink-0 text-[9px] font-medium text-slate-500">context</span>}{node.orphan && <span className="shrink-0 text-[9px] font-medium text-amber-700">missing parent</span>}{node.cycle && <span className="shrink-0 text-[9px] font-medium text-red-700">cycle</span>}</span>
-        <span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(node.session.startedAt)}</span><span>{formatBytes(node.session.size)}</span></span>
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5"><span className="truncate font-mono text-[10px] text-muted-foreground">{node.session.id}</span>{node.contextOnly && <span className="shrink-0 text-[10px] font-medium text-muted-foreground">context</span>}{node.orphan && <span className="shrink-0 text-[10px] font-medium text-amber-700 dark:text-amber-300">missing parent</span>}{node.cycle && <span className="shrink-0 text-[10px] font-medium text-destructive">cycle</span>}</span>
+        <span className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span>{formatDate(node.session.startedAt)}</span><span>{formatBytes(node.session.size)}</span></span>
       </button>
     </div>
     {open && node.children.map((child) => <ThreadTreeItem key={child.session.path} node={child} depth={depth + 1} expanded={expanded} selectedPath={selectedPath} onToggle={onToggle} onSelect={onSelect} />)}
   </div>;
 }
 
-export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: string; initialQuery?: string }) {
+export function SessionWorkspace({ initialPath, initialQuery, active = true }: { initialPath?: string; initialQuery?: string; active?: boolean }) {
   const [catalog, setCatalog] = useState<SessionCatalog | null>(null);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [project, setProject] = useState("All");
@@ -235,11 +219,12 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     selectedPath: "",
     expandedThreads: new Set<string>(),
   });
-  const [treePagination, setTreePagination] = useState({ key: "", limit: 500 });
+  const [treePagination, setTreePagination] = useState({ key: "", limit: 100 });
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SessionSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [sessionLoading, setSessionLoading] = useState(false);
+  const [browserSelection, setBrowserSelection] = useState(0);
   const [searching, setSearching] = useState(false);
   const [viewer, setViewer] = useState<"transcript" | "raw">("transcript");
   const [fullScanning, setFullScanning] = useState(false);
@@ -250,22 +235,36 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   const [transcriptQuery, setTranscriptQuery] = useState(initialQuery ?? "");
   const [activeTranscriptMatch, setActiveTranscriptMatch] = useState(0);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const sessionAbort = useRef<AbortController | null>(null);
+  const searchAbort = useRef<AbortController | null>(null);
   const fullScanAbort = useRef<AbortController | null>(null);
   const rawPageAbort = useRef<AbortController | null>(null);
 
   const loadSession = useCallback(async (path: string) => {
+    sessionAbort.current?.abort();
+    const controller = new AbortController();
+    sessionAbort.current = controller;
     fullScanAbort.current?.abort();
+    fullScanAbort.current = null;
     rawPageAbort.current?.abort();
     rawPageAbort.current = null;
-    setSessionLoading(true); setMessage(null);
+    setSessionLoading(true); setSession(null); setMessage(null);
+    dispatchArchiveNavigation({ type: "select", path });
     setViewer("transcript"); setFullScanning(false); setFullProgress(0); setFullScanComplete(false); setRawPage(null); setRawLoading(false);
     try {
-      const detail = await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`);
+      const detail = await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSession(detail);
+      setBrowserSelection(value => value + 1);
+      if (window.innerWidth < 1024) requestAnimationFrame(() => {
+        const reader = document.getElementById("session-document");
+        reader?.focus({ preventScroll: true });
+        reader?.scrollIntoView({ block: "start" });
+      });
       dispatchArchiveNavigation({ type: "select", path: detail.path });
     } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open session." });
-    } finally { setSessionLoading(false); }
+      if (!controller.signal.aborted) setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open session." });
+    } finally { if (!controller.signal.aborted) setSessionLoading(false); }
   }, []);
 
   const refreshCatalog = useCallback(async () => {
@@ -294,6 +293,8 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   }, [initialPath, loadSession]);
 
   useEffect(() => () => {
+    sessionAbort.current?.abort();
+    searchAbort.current?.abort();
     fullScanAbort.current?.abort();
     rawPageAbort.current?.abort();
   }, []);
@@ -321,6 +322,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
       let buffer = "";
 
       const accept = (update: TranscriptUpdate) => {
+        if (controller.signal.aborted) return;
         if (update.type === "entry") entries.push(update.entry);
         if (update.type === "progress") {
           setFullProgress(update.totalBytes ? update.scannedBytes / update.totalBytes : 1);
@@ -347,14 +349,13 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
           break;
         }
       }
-      setMessage({ kind: "success", text: `Scanned the complete transcript (${formatNumber(entries.length)} visible entries).` });
+      if (!controller.signal.aborted) setMessage({ kind: "success", text: `Scanned the complete transcript (${formatNumber(entries.length)} visible entries).` });
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         setMessage({ kind: "error", text: error instanceof Error ? error.message : "Complete transcript scan failed." });
       }
     } finally {
-      if (fullScanAbort.current === controller) fullScanAbort.current = null;
-      setFullScanning(false);
+      if (fullScanAbort.current === controller) { fullScanAbort.current = null; setFullScanning(false); }
     }
   }
 
@@ -389,17 +390,21 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     const needle = query.trim();
     if (!needle) { setSearchResults(null); return; }
     if (needle.length < 3) { setMessage({ kind: "error", text: "Enter at least 3 characters." }); return; }
+    searchAbort.current?.abort();
+    const controller = new AbortController(); searchAbort.current = controller;
     setSearching(true); setMessage(null);
     try {
-      const data = await sessionRequest<{ results: SessionSummary[] }>(`/api/sessions/search?q=${encodeURIComponent(needle)}`);
+      const data = await sessionRequest<{ results: SessionSummary[] }>(`/api/sessions/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSearchResults(data.results);
       setMessage({ kind: "success", text: data.results.length === 100 ? "Showing up to 100 matching sessions." : `${formatNumber(data.results.length)} matching sessions found.` });
     } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Session search failed." });
-    } finally { setSearching(false); }
+      if (!controller.signal.aborted) setMessage({ kind: "error", text: error instanceof Error ? error.message : "Session search failed." });
+    } finally { if (!controller.signal.aborted) setSearching(false); }
   }
 
   function clearSearch() {
+    searchAbort.current?.abort(); setSearching(false);
     setQuery(""); setSearchResults(null); setMessage(null);
   }
 
@@ -413,12 +418,11 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   }), [catalog, contentPaths, month, project, provenance]);
   const hasActiveFilters = project !== "All" || month !== "All" || provenance !== "All" || searchResults !== null;
   const visibleSessions = useMemo(() => (catalog?.sessions ?? []).filter((item) => matchingPaths.has(item.path)), [catalog, matchingPaths]);
-  const listedSessions = visibleSessions.slice(0, 1_000);
   const fullSessionForest = useMemo(() => buildSessionForest(catalog?.sessions ?? [], hasActiveFilters ? matchingPaths : undefined), [catalog, hasActiveFilters, matchingPaths]);
   const treeFilterKey = `${project}\n${month}\n${provenance}\n${searchResults?.map((item) => item.path).join("\n") ?? ""}`;
-  const treeRootLimit = treePagination.key === treeFilterKey ? treePagination.limit : 500;
+  const treeRootLimit = treePagination.key === treeFilterKey ? treePagination.limit : 100;
+  const listedSessions = visibleSessions.slice(0, treeRootLimit);
   const sessionForest = fullSessionForest.slice(0, treeRootLimit);
-  const maxProject = catalog?.topProjects[0]?.sessions ?? 1;
   const maxEvent = session?.eventTypes[0]?.count ?? 1;
   const canScanCompleteTranscript = Boolean(session && !fullScanComplete && (session.truncation.scanLimitReached || session.truncation.entryLimitReached));
   const transcriptMatchIds = useMemo(() => {
@@ -426,6 +430,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     if (!needle || !session) return [];
     return session.entries.filter((entry) => transcriptEntryText(entry).toLocaleLowerCase().includes(needle)).map((entry) => entry.id);
   }, [session, transcriptQuery]);
+  const transcriptMatches = useMemo(() => new Set(transcriptMatchIds), [transcriptMatchIds]);
   const firstTranscriptMatch = transcriptMatchIds[0];
   const displayedTranscriptMatch = Math.min(activeTranscriptMatch, Math.max(0, transcriptMatchIds.length - 1));
 
@@ -446,41 +451,33 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   const toggleThread = (key: string) => dispatchArchiveNavigation({ type: "toggle", key });
 
   if (loading && !catalog) return <div className="flex min-h-[65vh] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Indexing session metadata…</div>;
-  if (!catalog) return <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">{message?.text ?? "Codex sessions are unavailable."}</div>;
+  if (!catalog) return <div role="alert" className="rounded-xl border border-destructive/25 bg-destructive/8 p-5 text-sm text-destructive"><p>{message?.text ?? "Codex sessions are unavailable."}</p><Button className="mt-3" variant="outline" onClick={refreshCatalog}>Try again</Button></div>;
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge className="border-violet-200 bg-violet-50 text-violet-700"><MessageSquareText className="size-3" />JSONL corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Sessions</h1><p className="mt-1 max-w-3xl text-sm text-muted-foreground">Browse conversations, inspect tool activity, analyze projects and dates, or run an explicit full-text search across the local session archive.</p></div>
-        <div className="flex shrink-0 items-center gap-3 self-start"><span className="whitespace-nowrap text-xs text-muted-foreground">Last indexed {formatDate(catalog.indexedAt)}</span><Button variant="outline" size="sm" onClick={refreshCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button></div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge variant="secondary"><MessageSquareText className="size-3" />JSONL corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Session archive</h1><p className="mt-1 max-w-3xl text-sm text-muted-foreground">Read past conversations and tool calls. Filter by project, date, or origin to find a session.</p></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3 self-start"><span className="whitespace-nowrap text-xs text-muted-foreground">Last indexed {formatDate(catalog.indexedAt)}</span><Button variant="outline" size="sm" onClick={refreshCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button></div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Sessions" value={formatNumber(catalog.totals.sessions)} detail="Recursive JSONL files" icon={FileJson2} />
-        <Metric label="Archive size" value={formatBytes(catalog.totals.bytes)} detail="Cached metadata index" icon={HardDrive} />
-        <Metric label="Projects" value={formatNumber(catalog.totals.projects)} detail="Derived from working directories" icon={Folder} />
-        <Metric label="Active days" value={formatNumber(catalog.totals.activeDays)} detail={`${catalog.months.length} calendar months`} icon={CalendarDays} />
-      </div>
+      <p className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground"><span><b className="font-medium text-foreground">{formatNumber(catalog.totals.sessions)}</b> sessions</span><span>{formatBytes(catalog.totals.bytes)}</span><span>{catalog.totals.projects} projects</span><span>{catalog.totals.activeDays} active days</span></p>
 
-      {message && <div className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
+      {message && <div role={message.kind === "error" ? "alert" : "status"} className={cn("flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 dark:border-emerald-400/25 dark:bg-emerald-400/10 text-emerald-700 dark:text-emerald-300" : "border-destructive/25 bg-destructive/8 text-destructive")}><span className="flex min-w-0 items-start gap-2 break-words">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message" className="grid size-6 shrink-0 place-items-center rounded-md hover:bg-background/50"><X className="size-4" /></button></div>}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_300px]">
-        <ModuleSidebar><Card className="min-w-0 overflow-hidden lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:rounded-none lg:border-0 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
-          <CardHeader className="border-b p-4 lg:border-white/10"><div className="flex items-start justify-between gap-2"><div><CardTitle className="text-sm">Session archive</CardTitle><CardDescription>{searchResults ? `${visibleSessions.length} search results` : `${visibleSessions.length} indexed sessions`}</CardDescription></div><div className="sidebar-form-border flex rounded-lg border bg-muted/50 p-0.5 lg:bg-white/[0.06]"><button type="button" aria-pressed={archiveView === "list"} onClick={() => setArchiveView("list")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "list" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><List className="size-3" />List</button><button type="button" aria-pressed={archiveView === "tree"} onClick={() => setArchiveView("tree")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "tree" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><GitBranch className="size-3" />Tree</button></div></div><form onSubmit={search} className="flex gap-2 pt-2"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search session contents…" className="sidebar-form-border pl-9 pr-8 lg:bg-white/[0.06] lg:text-white lg:placeholder:text-slate-500" />{query && <button type="button" onClick={clearSearch} aria-label="Clear session search" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div><Button type="submit" size="icon" variant="outline" disabled={searching} aria-label="Search sessions" className="sidebar-form-border lg:bg-white/[0.06] lg:text-slate-300 lg:hover:bg-white/10 lg:hover:text-white">{searching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}</Button></form><p className="text-[10px] leading-4 text-muted-foreground">Search runs only when submitted and may scan the complete archive for up to 20 seconds.</p><div className="grid gap-2 pt-1"><select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter sessions by project" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All projects</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Filter sessions by month" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All months</option>{catalog.months.map((item) => <option key={item.month} value={item.month}>{monthLabel(item.month)}</option>)}</select><select value={provenance} onChange={(event) => setProvenance(event.target.value as "All" | SessionProvenance)} aria-label="Filter sessions by provenance" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All origins</option>{Object.entries(provenanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></CardHeader>
+      <div className="grid min-w-0 gap-5">
+        <ModuleSidebar id="session-browser" active={active} label="Browse sessions" selectionKey={browserSelection}><Card className="min-w-0 overflow-hidden lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:rounded-none lg:border-0 lg:bg-transparent lg:shadow-none">
+          <CardHeader className="border-b p-4"><div className="flex items-start justify-between gap-2"><div><CardTitle className="text-sm">Sessions</CardTitle><CardDescription>{searchResults ? `${visibleSessions.length} search results` : `${visibleSessions.length} indexed sessions`}</CardDescription></div><div className="sidebar-form-border flex rounded-lg border bg-muted/50 p-0.5"><button type="button" aria-pressed={archiveView === "list"} onClick={() => setArchiveView("list")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium", archiveView === "list" && "bg-card text-foreground shadow-sm")}><List className="size-3" />List</button><button type="button" aria-pressed={archiveView === "tree"} onClick={() => setArchiveView("tree")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium", archiveView === "tree" && "bg-card text-foreground shadow-sm")}><GitBranch className="size-3" />Tree</button></div></div><form onSubmit={search} className="flex gap-2 pt-2"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Search session contents" minLength={3} maxLength={200} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search session contents…" className="sidebar-form-border pl-9 pr-8" />{query && <button type="button" onClick={clearSearch} aria-label="Clear session search" className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-muted"><X className="size-3.5" /></button>}</div><Button type="submit" size="icon" variant="outline" disabled={searching} aria-label="Search sessions" className="sidebar-form-border">{searching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}</Button></form><p className="text-[11px] leading-4 text-muted-foreground">Enter 3+ characters. Searches may take up to 20 seconds.</p><div className="grid gap-2 pt-1"><select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter sessions by project" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-card px-2 text-xs text-foreground"><option value="All">All projects</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Filter sessions by month" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-card px-2 text-xs text-foreground"><option value="All">All months</option>{catalog.months.map((item) => <option key={item.month} value={item.month}>{monthLabel(item.month)}</option>)}</select><select value={provenance} onChange={(event) => setProvenance(event.target.value as "All" | SessionProvenance)} aria-label="Filter sessions by provenance" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-card px-2 text-xs text-foreground"><option value="All">All origins</option>{Object.entries(provenanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>{hasActiveFilters && <button type="button" onClick={() => { setProject("All"); setMonth("All"); setProvenance("All"); clearSearch(); }} className="mt-1 text-left text-xs font-medium text-accent-foreground underline underline-offset-4">Reset filters</button>}</CardHeader>
           <CardContent
-            className="scrollbar-thin max-h-[760px] overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1"
-            onScroll={(event) => {
-              const viewport = event.currentTarget;
-              if (archiveView === "tree" && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120 && sessionForest.length < fullSessionForest.length) {
-                setTreePagination({ key: treeFilterKey, limit: treeRootLimit + 500 });
-              }
-            }}
+            className="scrollbar-thin max-h-72 overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1"
+
           >
-            {archiveView === "list" ? <>{listedSessions.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No sessions match the current filters.</p> : <div className="space-y-1">{listedSessions.map((item) => <button key={item.path} onClick={() => loadSession(item.path)} className={cn("w-full rounded-lg px-2.5 py-2.5 text-left transition hover:bg-muted lg:hover:bg-white/[0.06]", session?.path === item.path && "bg-violet-50 text-violet-950 lg:bg-violet-400/10 lg:text-violet-100")}><span className="flex items-start gap-2.5"><span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", session?.path === item.path ? "bg-violet-100 text-violet-700 lg:bg-violet-400/10 lg:text-violet-300" : "bg-muted text-muted-foreground lg:bg-white/[0.06]")}><MessageSquareText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{item.project}</span><ProvenanceBadge provenance={item.provenance} /></span><span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">{item.id}</span><span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(item.startedAt)}</span><span>{formatBytes(item.size)}</span></span></span></span></button>)}</div>}{visibleSessions.length > listedSessions.length && <p className="p-3 text-center text-[10px] text-muted-foreground">Showing the first {listedSessions.length} sessions. Narrow the filters to see more.</p>}</> : sessionForest.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No threads match the current filters.</p> : <div className="space-y-1">{sessionForest.map((node) => <ThreadTreeItem key={node.session.path} node={node} expanded={expandedThreads} selectedPath={session?.path} onToggle={toggleThread} onSelect={loadSession} />)}</div>}
+            {archiveView === "list" ? <>{listedSessions.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No sessions match the current filters.</p> : <div className="space-y-1">{listedSessions.map((item) => <button key={item.path} aria-current={session?.path === item.path ? "true" : undefined} onClick={() => loadSession(item.path)} className={cn("w-full rounded-lg px-2.5 py-2.5 text-left transition hover:bg-muted", session?.path === item.path && "bg-accent text-accent-foreground")}><span className="flex items-start gap-2.5"><span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", session?.path === item.path ? "bg-accent text-accent-foreground" : "bg-muted text-muted-foreground")}><MessageSquareText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{item.project}</span><ProvenanceBadge provenance={item.provenance} /></span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{item.id}</span><span className="mt-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground"><span>{formatDate(item.startedAt)}</span><span>{formatBytes(item.size)}</span></span></span></span></button>)}</div>}</> : sessionForest.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No threads match the current filters.</p> : <div className="space-y-1">{sessionForest.map((node) => <ThreadTreeItem key={node.session.path} node={node} expanded={expandedThreads} selectedPath={archiveNavigation.selectedPath} onToggle={toggleThread} onSelect={loadSession} />)}</div>}
+            {(archiveView === "tree" ? sessionForest.length < fullSessionForest.length : listedSessions.length < visibleSessions.length) && <Button variant="ghost" className="mt-2 w-full" onClick={() => setTreePagination({ key: treeFilterKey, limit: treeRootLimit + 100 })}>Show more sessions</Button>}
+
           </CardContent>
         </Card></ModuleSidebar>
 
-        <Card className="min-w-0 overflow-hidden">
+        <Card id="session-document" tabIndex={-1} className="min-w-0 scroll-mt-20 overflow-hidden">
           {session ? <>
             <div className="border-b px-4 py-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -490,11 +487,11 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
                     {(session.truncation.scanLimitReached || session.truncation.entryLimitReached) && <Badge variant="warning">partial transcript</Badge>}
                     {!session.truncation.scanLimitReached && !session.truncation.entryLimitReached && (session.truncation.oversizedRecords > 0 || session.truncation.invalidRecords > 0) && <Badge variant="warning">raw records omitted</Badge>}
                   </div>
-                  <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">{session.path}</p>
+                  <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{session.path}</p>
                 </div>
-                <div className="flex shrink-0 flex-wrap gap-1.5"><ProvenanceBadge provenance={session.provenance} /><Badge variant="secondary">{session.model}</Badge><Badge variant="outline">{session.effort}</Badge></div>
+                <div className="flex shrink-0 flex-wrap items-center gap-1.5 lg:items-stretch"><ModuleSidebarTrigger targetId="session-browser" label="Browse sessions" /><ProvenanceBadge provenance={session.provenance} /><Badge variant="secondary">{session.model}</Badge><Badge variant="outline">{session.effort}</Badge></div>
               </div>
-              <div className="mt-3 grid grid-cols-2 gap-2 text-[10px] text-muted-foreground sm:grid-cols-4">
+              <div className="mt-3 grid grid-cols-2 gap-2 text-[11px] text-muted-foreground sm:grid-cols-4">
                 <span>{formatNumber(session.metrics.userMessages + session.metrics.assistantMessages)} messages</span>
                 <span>{formatNumber(session.metrics.toolCalls)} tools</span>
                 <span>{duration(session.metrics.durationMs)}</span>
@@ -502,25 +499,25 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
                 <div className="flex rounded-lg border bg-muted/50 p-0.5">
-                  <button aria-pressed={viewer === "transcript"} onClick={() => selectViewer("transcript")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "transcript" && "bg-white shadow-sm")}><MessageSquareText className="size-3" />Transcript</button>
-                  <button aria-pressed={viewer === "raw"} onClick={() => selectViewer("raw")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "raw" && "bg-white shadow-sm")}><Braces className="size-3" />Raw JSONL</button>
+                  <button aria-pressed={viewer === "transcript"} onClick={() => selectViewer("transcript")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "transcript" && "bg-card text-foreground shadow-sm")}><MessageSquareText className="size-3" />Transcript</button>
+                  <button aria-pressed={viewer === "raw"} onClick={() => selectViewer("raw")} className={cn("flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium", viewer === "raw" && "bg-card text-foreground shadow-sm")}><Braces className="size-3" />Raw JSONL</button>
                 </div>
                 {viewer === "transcript" && canScanCompleteTranscript && !fullScanning && <Button size="sm" variant="outline" onClick={scanCompleteTranscript}><ScanText className="size-3.5" />Scan complete transcript</Button>}
                 {viewer === "transcript" && fullScanning && <Button size="sm" variant="outline" onClick={() => fullScanAbort.current?.abort()}><X className="size-3.5" />Cancel scan</Button>}
               </div>
-              {fullScanning && <div className="mt-3"><div className="mb-1 flex justify-between text-[10px] text-muted-foreground"><span>Scanning complete file…</span><span>{Math.round(fullProgress * 100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full bg-violet-500 transition-[width]" style={{ width: `${fullProgress * 100}%` }} /></div></div>}
+              {fullScanning && <div className="mt-3"><div className="mb-1 flex justify-between text-[11px] text-muted-foreground"><span>Scanning complete file…</span><span>{Math.round(fullProgress * 100)}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-muted"><div className="h-full bg-primary transition-[width]" style={{ width: `${fullProgress * 100}%` }} /></div></div>}
             </div>
 
-            {viewer === "transcript" && <div className="flex flex-col gap-2 border-b bg-white px-4 py-3 sm:flex-row sm:items-center">
-              <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Find in selected transcript" value={transcriptQuery} onChange={(event) => { setTranscriptQuery(event.target.value); setActiveTranscriptMatch(0); }} placeholder="Find in this transcript…" className="h-8 pl-9 pr-8 text-xs" />{transcriptQuery && <button type="button" onClick={() => { setTranscriptQuery(""); setActiveTranscriptMatch(0); }} aria-label="Clear transcript search" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div>
+            {viewer === "transcript" && <div className="flex flex-col gap-2 border-b bg-card px-4 py-3 sm:flex-row sm:items-center">
+              <div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Find in selected transcript" value={transcriptQuery} onChange={(event) => { setTranscriptQuery(event.target.value); setActiveTranscriptMatch(0); }} placeholder="Find in this transcript…" className="h-8 pl-9 pr-8 text-xs" />{transcriptQuery && <button type="button" onClick={() => { setTranscriptQuery(""); setActiveTranscriptMatch(0); }} aria-label="Clear transcript search" className="absolute right-1 top-1/2 grid size-7 -translate-y-1/2 place-items-center rounded-md text-muted-foreground hover:bg-muted"><X className="size-3.5" /></button>}</div>
               <div className="flex shrink-0 items-center justify-between gap-2 sm:justify-end">
-                <span className={cn("text-[10px]", transcriptQuery && transcriptMatchIds.length === 0 ? "text-amber-700" : "text-muted-foreground")}>{transcriptQuery ? transcriptMatchIds.length > 0 ? `${displayedTranscriptMatch + 1} of ${transcriptMatchIds.length} visible matches` : "No visible transcript match" : "Search loaded messages and tools"}</span>
+                <span className={cn("text-[11px]", transcriptQuery && transcriptMatchIds.length === 0 ? "text-amber-700 dark:text-amber-300" : "text-muted-foreground")}>{transcriptQuery ? transcriptMatchIds.length > 0 ? `${displayedTranscriptMatch + 1} of ${transcriptMatchIds.length} visible matches` : "No visible transcript match" : "Search loaded messages and tools"}</span>
                 <span className="flex"><Button type="button" size="icon" variant="ghost" className="size-7" disabled={transcriptMatchIds.length === 0} onClick={() => focusTranscriptMatch(displayedTranscriptMatch - 1)} aria-label="Previous transcript match"><ChevronLeft className="size-3.5" /></Button><Button type="button" size="icon" variant="ghost" className="size-7" disabled={transcriptMatchIds.length === 0} onClick={() => focusTranscriptMatch(displayedTranscriptMatch + 1)} aria-label="Next transcript match"><ChevronRight className="size-3.5" /></Button></span>
               </div>
-              {transcriptQuery && transcriptMatchIds.length === 0 && <p className="text-[10px] leading-4 text-amber-700 sm:max-w-48">The source match may be in metadata, raw JSONL, or beyond this preview.</p>}
+              {transcriptQuery && transcriptMatchIds.length === 0 && <p className="text-[11px] leading-4 text-amber-700 dark:text-amber-300 sm:max-w-48">The source match may be in metadata, raw JSONL, or beyond this preview.</p>}
             </div>}
 
-            {viewer === "transcript" && session.truncated && <div className="flex items-start justify-between gap-3 border-b border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-800">
+            {viewer === "transcript" && session.truncated && <div className="flex items-start justify-between gap-3 border-b border-amber-200 bg-amber-50 dark:border-amber-400/25 dark:bg-amber-400/10 px-4 py-3 text-xs leading-5 text-amber-800 dark:text-amber-200">
               <span className="flex min-w-0 items-start gap-2"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" /><span>
                 {session.truncation.scanLimitReached && <>Preview stopped after {formatBytes(session.metrics.scannedBytes)} of {formatBytes(session.size)}. Scan the complete transcript to continue.</>}
                 {session.truncation.entryLimitReached && <> The transcript reached its {formatNumber(fullScanComplete ? 20_000 : 1_500)}-entry display limit.</>}
@@ -530,37 +527,36 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
               <button onClick={() => selectViewer("raw")} className="shrink-0 font-semibold underline underline-offset-2">View raw</button>
             </div>}
 
-            {viewer === "transcript" ? <div className="scrollbar-thin max-h-[760px] min-h-[620px] space-y-4 overflow-y-auto bg-slate-50/60 p-4 sm:p-5">
+            {viewer === "transcript" ? <div role="region" aria-label="Session transcript" tabIndex={0} className="scrollbar-thin max-h-[760px] min-h-[360px] sm:min-h-[620px] space-y-4 overflow-y-auto bg-muted/25 p-4 sm:p-5">
               {sessionLoading ? <div className="flex min-h-[580px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Reading session…</div>
-                : session.entries.length ? session.entries.map((entry) => <TranscriptEntry key={entry.id} entry={entry} matched={transcriptMatchIds.includes(entry.id)} />)
+                : session.entries.length ? session.entries.map((entry) => <TranscriptEntry key={entry.id} entry={entry} matched={transcriptMatches.has(entry.id)} />)
                   : <div className="flex min-h-[580px] items-center justify-center text-sm text-muted-foreground">No human messages or tool calls were found in the scanned portion.</div>}
-            </div> : <div className="min-h-[620px] bg-[#111827] text-slate-200">
-              <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 px-4 py-2 text-[10px] text-slate-400">
+            </div> : <div className="min-h-[620px] bg-muted/30 text-foreground">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2 text-[11px] text-muted-foreground">
                 <span>{rawPage ? `Bytes ${(rawPage.offset + (rawPage.bytes ? 1 : 0)).toLocaleString("en-US")}–${(rawPage.offset + rawPage.bytes).toLocaleString("en-US")} of ${rawPage.fileSize.toLocaleString("en-US")}` : "Loading raw JSONL…"}</span>
                 <span className="flex items-center gap-1.5">
-                  {rawPage?.startsMidLine && <Badge variant="outline" className="border-amber-500/60 text-amber-300">starts inside record</Badge>}
-                  {rawPage?.endsMidLine && <Badge variant="outline" className="border-amber-500/60 text-amber-300">record continues</Badge>}
+                  {rawPage?.startsMidLine && <Badge variant="warning">starts inside record</Badge>}
+                  {rawPage?.endsMidLine && <Badge variant="warning">record continues</Badge>}
                 </span>
                 <span className="flex items-center gap-1">
-                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.offset === 0} onClick={() => void loadRawPage(0)} aria-label="First raw page"><ChevronsLeft className="size-3.5" /></Button>
-                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || rawPage?.previousOffset === null} onClick={() => rawPage && void loadRawPage(rawPage.previousOffset ?? 0)} aria-label="Previous raw page"><ChevronLeft className="size-3.5" /></Button>
-                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => { const offset = rawPage?.nextOffset; if (offset !== null && offset !== undefined) void loadRawPage(offset); }} aria-label="Next raw page"><ChevronRight className="size-3.5" /></Button>
-                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => rawPage && void loadRawPage(Math.max(0, rawPage.fileSize - rawPage.byteLimit))} aria-label="Last raw page"><ChevronsRight className="size-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="size-8 text-muted-foreground" disabled={rawLoading || !rawPage || rawPage.offset === 0} onClick={() => void loadRawPage(0)} aria-label="First raw page"><ChevronsLeft className="size-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="size-8 text-muted-foreground" disabled={rawLoading || !rawPage || rawPage.previousOffset === null} onClick={() => rawPage && void loadRawPage(rawPage.previousOffset ?? 0)} aria-label="Previous raw page"><ChevronLeft className="size-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="size-8 text-muted-foreground" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => { const offset = rawPage?.nextOffset; if (offset !== null && offset !== undefined) void loadRawPage(offset); }} aria-label="Next raw page"><ChevronRight className="size-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="size-8 text-muted-foreground" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => rawPage && void loadRawPage(Math.max(0, rawPage.fileSize - rawPage.byteLimit))} aria-label="Last raw page"><ChevronsRight className="size-3.5" /></Button>
                 </span>
               </div>
-              {rawLoading ? <div className="flex min-h-[580px] items-center justify-center gap-2 text-sm text-slate-400"><Loader2 className="size-4 animate-spin" />Reading raw bytes…</div>
-                : <pre className="scrollbar-thin max-h-[720px] min-h-[580px] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[10px] leading-5">{rawPage?.text}</pre>}
+              {rawLoading ? <div className="flex min-h-[580px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Reading raw bytes…</div>
+                : <pre tabIndex={0} className="scrollbar-thin max-h-[720px] min-h-[580px] overflow-auto whitespace-pre-wrap break-words p-4 font-mono text-[11px] leading-5">{rawPage?.text}</pre>}
             </div>}
 
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{session.project} · {session.source} · {session.originator}</span><span>Started {formatDate(session.startedAt)} · {formatBytes(session.size)} · read-only</span></div>
-          </> : <div className="flex min-h-[720px] items-center justify-center text-sm text-muted-foreground">Select a session.</div>}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[11px] text-muted-foreground"><span>{session.project} · {session.source} · {session.originator}</span><span>Started {formatDate(session.startedAt)} · {formatBytes(session.size)} · read-only</span></div>
+          </> : <div role="status" className="flex min-h-[360px] items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">{sessionLoading ? <><Loader2 className="size-4 animate-spin" />Reading session…</> : catalog.sessions.length ? "Select a session from the archive." : "No sessions found. Conversations will appear here after you use Codex."}</div>}
         </Card>
 
-        <div className="space-y-5 xl:grid xl:grid-cols-3 xl:gap-5 xl:space-y-0 2xl:block 2xl:space-y-5">
-          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-violet-600" />Top projects</CardTitle><CardDescription>Sessions by working directory</CardDescription></CardHeader><CardContent className="space-y-2.5">{catalog.topProjects.slice(0, 10).map((item) => <button key={item.project} onClick={() => setProject(item.project)} className="block w-full text-left"><div className="mb-1 flex items-center justify-between gap-3 text-[11px]"><span className="truncate">{item.project}</span><span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(item.sessions)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.max(4, item.sessions / maxProject * 100)}%` }} /></div></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><CalendarDays className="size-4 text-indigo-500" />Monthly activity</CardTitle><CardDescription>Recent archive volume</CardDescription></CardHeader><CardContent className="space-y-2">{catalog.months.slice(0, 10).map((item) => <button key={item.month} onClick={() => setMonth(item.month)} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span>{monthLabel(item.month)}</span><span className="text-right"><b className="font-semibold">{formatNumber(item.sessions)}</b><small className="ml-2 text-[9px] text-muted-foreground">{formatBytes(item.bytes)}</small></span></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Terminal className="size-4 text-cyan-600" />Selected activity</CardTitle><CardDescription>Most frequent JSONL event types</CardDescription></CardHeader><CardContent className="space-y-2.5">{session?.eventTypes.slice(0, 10).map((item) => <div key={item.type}><div className="mb-1 flex items-center justify-between gap-3 text-[10px]"><span className="truncate font-mono">{item.type}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.max(4, item.count / maxEvent * 100)}%` }} /></div></div>) ?? <p className="text-xs text-muted-foreground">Select a session to inspect its event composition.</p>}</CardContent></Card>
-        </div>
+        <details className="rounded-2xl border bg-card p-4"><summary className="cursor-pointer text-sm font-medium">Session event breakdown</summary>
+          <p className="mt-3 text-xs text-muted-foreground">Most frequent JSONL event types in this session.</p>
+          <div className="mt-3 space-y-2.5">{session?.eventTypes.slice(0, 10).map((item) => <div key={item.type}><div className="mb-1 flex items-center justify-between gap-3 text-xs"><span className="truncate font-mono">{item.type}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(4, item.count / maxEvent * 100)}%` }} /></div></div>) ?? <p className="text-xs text-muted-foreground">Select a session to inspect its event composition.</p>}</div>
+        </details>
       </div>
     </div>
   );
