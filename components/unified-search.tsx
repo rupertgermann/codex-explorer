@@ -11,6 +11,7 @@ import {
   MessageSquareText,
   Search,
   Sparkles,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -66,12 +67,14 @@ const matchLabels = { user: "User", assistant: "Assistant", tool: "Tool", metada
 export function UnifiedSearch({
   databases,
   active,
+  catalogError,
   onOpenMemory,
   onOpenSession,
   onOpenDatabase,
 }: {
   databases: SearchableDatabase[];
   active: boolean;
+  catalogError?: string;
   onOpenMemory: (path: string) => void;
   onOpenSession: (path: string, query: string) => void;
   onOpenDatabase: (id: string) => void;
@@ -80,7 +83,8 @@ export function UnifiedSearch({
   const [submittedQuery, setSubmittedQuery] = useState("");
   const [memoryResults, setMemoryResults] = useState<MemorySearchResult[]>([]);
   const [sessionResults, setSessionResults] = useState<SessionSearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
+  const [pending, setPending] = useState<string[]>([]);
+  const [cancelled, setCancelled] = useState(false);
   const [errors, setErrors] = useState<string[]>([]);
   const activeSearch = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement | null>(null);
@@ -88,6 +92,7 @@ export function UnifiedSearch({
     () => searchDatabaseCatalog(databases, submittedQuery),
     [databases, submittedQuery],
   );
+  const searching = pending.length > 0;
   const totalResults = memoryResults.length + sessionResults.length + databaseResults.length;
 
   useEffect(() => () => activeSearch.current?.abort(), []);
@@ -105,26 +110,28 @@ export function UnifiedSearch({
     const controller = new AbortController();
     activeSearch.current = controller;
     setSubmittedQuery(needle);
-    setSearching(true);
+    setPending(["Memory", "Sessions"]);
+    setCancelled(false);
     setErrors([]);
     setMemoryResults([]);
     setSessionResults([]);
 
     const encoded = encodeURIComponent(needle);
-    const [memory, sessions] = await Promise.allSettled([
-      searchRequest<MemorySearchResult>(`/api/memory/search?q=${encoded}`, controller.signal),
-      searchRequest<SessionSearchResult>(`/api/sessions/search?q=${encoded}`, controller.signal),
+    async function source<T>(name: string, url: string, accept: (results: T[]) => void) {
+      try {
+        const results = await searchRequest<T>(url, controller.signal);
+        if (!controller.signal.aborted) accept(results);
+      } catch (reason) {
+        if (!controller.signal.aborted) setErrors(current => [...current, `${name}: ${reason instanceof Error ? reason.message : "Search failed."}`]);
+      } finally {
+        if (!controller.signal.aborted) setPending(current => current.filter(source => source !== name));
+      }
+    }
+    await Promise.all([
+      source("Memory", `/api/memory/search?q=${encoded}`, setMemoryResults),
+      source("Sessions", `/api/sessions/search?q=${encoded}`, setSessionResults),
     ]);
-
-    if (controller.signal.aborted) return;
-    setMemoryResults(memory.status === "fulfilled" ? memory.value : []);
-    setSessionResults(sessions.status === "fulfilled" ? sessions.value : []);
-    setErrors([
-      ...(memory.status === "rejected" ? [`Memory: ${memory.reason instanceof Error ? memory.reason.message : "Search failed."}`] : []),
-      ...(sessions.status === "rejected" ? [`Sessions: ${sessions.reason instanceof Error ? sessions.reason.message : "Search failed."}`] : []),
-    ]);
-    setSearching(false);
-    activeSearch.current = null;
+    if (activeSearch.current === controller) activeSearch.current = null;
   }
 
   return (
@@ -141,9 +148,11 @@ export function UnifiedSearch({
             <div className="relative min-w-0 flex-1">
               <Search className="absolute left-4 top-1/2 size-5 -translate-y-1/2 text-indigo-500" />
               <Input
+                id="global-search"
                 ref={input}
                 type="search"
                 minLength={3}
+                required
                 maxLength={200}
                 aria-label="Search all Codex data"
                 value={query}
@@ -152,16 +161,17 @@ export function UnifiedSearch({
                 className="h-12 border-indigo-200 bg-white pl-12 pr-4 text-base shadow-none"
               />
             </div>
-            <Button type="submit" className="h-12 px-5" disabled={searching}>
+            <Button type="submit" className="h-12 px-5" disabled={query.trim().length < 3}>
               {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              {searching ? "Searching archive…" : "Search everything"}
+              Search everything
             </Button>
+            {searching && <Button type="button" variant="outline" className="h-12" onClick={() => { activeSearch.current?.abort(); setPending([]); setCancelled(true); }}><X className="size-4" />Cancel search</Button>}
           </div>
-          <p className="border-t bg-indigo-50/50 px-5 py-2.5 text-[11px] leading-5 text-indigo-900/65">Memory and schema results are fast. Session search scans the complete local JSONL archive and can take up to 20 seconds.</p>
+          <p className="border-t bg-indigo-50/50 px-5 py-2.5 text-xs leading-5 text-indigo-900/75">Enter at least 3 characters. Results appear as each source finishes; sessions can take up to 20 seconds.</p>
         </form>
       </Card>
 
-      {errors.length > 0 && <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><p className="flex items-center gap-2 font-semibold"><AlertTriangle className="size-4" />Some sources could not be searched</p>{errors.map((error) => <p key={error} className="mt-1 text-xs">{error}</p>)}</div>}
+      {(errors.length > 0 || catalogError) && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"><p className="flex items-center gap-2 font-semibold"><AlertTriangle className="size-4" />Some sources could not be searched</p>{[...errors, ...(catalogError ? [`Database schema: ${catalogError}`] : [])].map((error) => <p key={error} className="mt-1 text-xs">{error}</p>)}</div>}
 
       {!submittedQuery ? <>
         <div className="grid gap-3 md:grid-cols-3">
@@ -170,22 +180,22 @@ export function UnifiedSearch({
           <ScopeCard icon={Database} title="Database schema" description="Locate stores, tables, columns, and indexes by name or type." />
         </div>
         <p className="text-center text-xs text-muted-foreground">Try an error message, project name, API concept, decision, table, or column.</p>
-      </> : <div className="space-y-5" aria-live="polite" aria-busy={searching}>
+      </> : <div className="space-y-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-sm font-semibold">{searching ? "Searching all sources…" : `${formatNumber(totalResults)} results for “${submittedQuery}”`}</p>
+          <p role="status" className="text-sm font-semibold">{`${formatNumber(totalResults)} results for “${submittedQuery}”`}{searching && <span className="ml-2 font-normal text-muted-foreground">Searching {pending.join(" and ")}…</span>}{cancelled && <span className="ml-2 font-normal text-muted-foreground">Search stopped · partial results</span>}</p>
           <div className="flex gap-2 text-[10px] text-muted-foreground"><span>{memoryResults.length} Memory {memoryResults.length === 1 ? "file" : "files"}</span><span>·</span><span>{sessionResults.length} {sessionResults.length === 1 ? "session" : "sessions"}</span><span>·</span><span>{databaseResults.length} {databaseResults.length === 1 ? "database" : "databases"}</span></div>
         </div>
 
-        {!searching && totalResults === 0 && errors.length === 0 && <Card><CardContent className="flex min-h-40 flex-col items-center justify-center text-center"><Search className="mb-3 size-8 text-muted-foreground/50" /><p className="font-medium">No local matches</p><p className="mt-1 text-sm text-muted-foreground">Try a shorter phrase, a project name, or a distinctive word.</p></CardContent></Card>}
+        {!searching && !cancelled && !catalogError && totalResults === 0 && errors.length === 0 && <Card><CardContent className="flex min-h-40 flex-col items-center justify-center text-center"><Search className="mb-3 size-8 text-muted-foreground/50" /><p className="font-medium">No local matches</p><p className="mt-1 text-sm text-muted-foreground">Try a shorter phrase, a project name, or a distinctive word.</p></CardContent></Card>}
 
         {memoryResults.length > 0 && <Card className="overflow-hidden">
           <CardHeader className="border-b bg-cyan-50/40"><CardTitle className="flex items-center gap-2 text-sm"><Brain className="size-4 text-cyan-700" />Memory <Badge variant="secondary">{memoryResults.length}</Badge></CardTitle><CardDescription>Matching Markdown files with line-level context</CardDescription></CardHeader>
-          <CardContent className="divide-y p-0">{memoryResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenMemory(result.path)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-cyan-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-700"><FileText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-3"><span className="truncate text-sm font-semibold">{result.title}</span><span className="shrink-0 text-[10px] text-muted-foreground">{result.matchCount} {result.matchCount === 1 ? "match" : "matches"}</span></span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.path}</span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block border-l-2 border-cyan-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-cyan-700">L{match.line}</b>{match.excerpt}</span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-cyan-700" /></button>)}</CardContent>
+          <CardContent className="divide-y p-0">{memoryResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenMemory(result.path)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-cyan-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-cyan-50 text-cyan-700"><FileText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-3"><span className="truncate text-sm font-semibold">{result.title}</span><span className="shrink-0 text-[10px] text-muted-foreground">{result.matchCount} {result.matchCount === 1 ? "match" : "matches"}</span></span><span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">{result.path}</span>{result.matches.slice(0, 2).map((match, index) => <span key={`${match.line}-${index}`} className="mt-2 block break-words border-l-2 border-cyan-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-cyan-700">L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-cyan-700" /></button>)}</CardContent>
         </Card>}
 
         {sessionResults.length > 0 && <Card className="overflow-hidden">
           <CardHeader className="border-b bg-violet-50/40"><CardTitle className="flex items-center gap-2 text-sm"><MessageSquareText className="size-4 text-violet-700" />Sessions <Badge variant="secondary">{sessionResults.length}</Badge></CardTitle><CardDescription>Matching conversations with the exact message or event context</CardDescription></CardHeader>
-          <CardContent className="divide-y p-0">{sessionResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenSession(result.path, submittedQuery)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-violet-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-50 text-violet-700"><MessageSquareText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{result.project}</span><Badge variant="outline" className="px-1.5 py-0 text-[9px]">{result.provenance}</Badge></span><span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{result.id} · {formatDate(result.startedAt)} · {formatBytes(result.size)}</span>{result.matches.slice(0, 2).map((match) => <span key={`${match.line}-${match.kind}`} className="mt-2 block border-l-2 border-violet-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-violet-700">{matchLabels[match.kind]} · L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-violet-700" /></button>)}</CardContent>
+          <CardContent className="divide-y p-0">{sessionResults.map((result) => <button key={result.path} type="button" onClick={() => onOpenSession(result.path, submittedQuery)} className="group flex w-full items-start gap-3 p-4 text-left transition hover:bg-violet-50/50"><span className="grid size-9 shrink-0 place-items-center rounded-lg bg-violet-50 text-violet-700"><MessageSquareText className="size-4" /></span><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{result.project}</span><Badge variant="outline" className="px-1.5 py-0 text-[9px]">{result.provenance}</Badge></span><span className="mt-1 block truncate font-mono text-[10px] text-muted-foreground">{result.id} · {formatDate(result.startedAt)} · {formatBytes(result.size)}</span>{result.matches.slice(0, 2).map((match) => <span key={`${match.line}-${match.kind}`} className="mt-2 block break-words border-l-2 border-violet-200 pl-2 text-xs leading-5 text-slate-600"><b className="mr-1 text-violet-700">{matchLabels[match.kind]} · L{match.line}</b><HighlightedText text={match.excerpt} query={submittedQuery} /></span>)}</span><ArrowRight className="mt-2 size-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-violet-700" /></button>)}</CardContent>
           {sessionResults.length === 100 && <p className="border-t bg-violet-50/30 px-4 py-2 text-[10px] text-muted-foreground">Showing the first 100 matching sessions. Use a more specific phrase to narrow the result set.</p>}
         </Card>}
 

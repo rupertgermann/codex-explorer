@@ -4,7 +4,7 @@ async function searchForAtlas(page: Page) {
   await page.keyboard.press("Meta+k");
   await expect(page.getByRole("heading", { name: "Search everything" })).toBeVisible();
   await page.getByRole("searchbox", { name: "Search all Codex data" }).fill("atlas");
-  await page.getByRole("button", { name: "Search everything", exact: true }).click();
+  await page.getByRole("main").getByRole("button", { name: "Search everything", exact: true }).click();
   await expect(page.getByText("3 results for “atlas”")).toBeVisible();
 }
 
@@ -34,7 +34,7 @@ test("searches every local source and opens each result in context", async ({ pa
   await expect(page.getByText("3 results for “atlas”")).toBeVisible();
   await page.getByRole("button", { name: /search-fixture.*atlas_records/ }).click();
   await expect(page.getByRole("heading", { name: "search-fixture" })).toBeVisible();
-  await expect(page.getByText("atlas_records", { exact: true })).toBeVisible();
+  await expect(page.getByText("atlas_records", { exact: true }).filter({ visible: true })).toBeVisible();
 });
 
 test("keeps unified search usable from the mobile module menu", async ({ page }) => {
@@ -43,7 +43,7 @@ test("keeps unified search usable from the mobile module menu", async ({ page })
   await page.getByRole("button", { name: "Choose workspace" }).click();
   await page.getByRole("button", { name: "Search", exact: true }).click();
   await page.getByRole("searchbox", { name: "Search all Codex data" }).fill("atlas");
-  await page.getByRole("button", { name: "Search everything", exact: true }).click();
+  await page.getByRole("main").getByRole("button", { name: "Search everything", exact: true }).click();
   await expect(page.getByText("3 results for “atlas”")).toBeVisible();
   await expect(page.getByRole("button", { name: /Atlas search fixture/ })).toBeVisible();
 });

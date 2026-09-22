@@ -1,4 +1,4 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { seedProjectMemory } from "../fixtures/project-memory.mjs";
@@ -22,6 +22,7 @@ writeFileSync(join(root, "atlas.md"), "# Atlas search fixture\n\nThe atlas workf
 const sessionsRoot = "/tmp/codex-explorer-e2e-sessions";
 rmSync(sessionsRoot, { recursive: true, force: true });
 mkdirSync(join(sessionsRoot, "2026", "08", "30"), { recursive: true });
+cpSync(join(projectHome, "sessions"), sessionsRoot, { recursive: true });
 writeFileSync(join(sessionsRoot, "2026", "08", "30", "atlas.jsonl"), [
   { timestamp: "2026-08-30T09:00:00.000Z", type: "session_meta", payload: { id: "atlas-session", cwd: "/work/atlas-project", thread_source: "user" } },
   { timestamp: "2026-08-30T09:01:00.000Z", type: "event_msg", payload: { type: "user_message", message: "Investigate the atlas workflow across all local Codex sources." } },
@@ -33,4 +34,7 @@ rmSync(databaseRoot, { recursive: true, force: true });
 mkdirSync(databaseRoot, { recursive: true });
 const database = new DatabaseSync(join(databaseRoot, "search-fixture.sqlite"));
 database.exec("CREATE TABLE atlas_records (id INTEGER PRIMARY KEY, atlas_note TEXT NOT NULL); CREATE INDEX idx_atlas_note ON atlas_records(atlas_note)");
+database.exec("CREATE TABLE empty_records (id INTEGER PRIMARY KEY, note TEXT)");
+const insert = database.prepare("INSERT INTO atlas_records (atlas_note) VALUES (?)");
+for (let index = 1; index <= 65; index++) insert.run(`Record ${index}`);
 database.close();

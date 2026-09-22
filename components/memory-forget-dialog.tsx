@@ -33,7 +33,7 @@ function Sections({ title, sections }: { title: string; sections: ForgetSection[
 export function MemoryForgetDialog({ open, loading, error, plan, result, recheck, confirmedDurableIds, project, onOpenChange, onConfirm, onRefresh, onApply, onRecheck }: Props) {
   const projectPlan = plan && "kind" in plan ? plan : null;
   const summaryPlan = plan && !("kind" in plan) ? plan : null;
-  const visiblePlan = project && projectPlan?.directory !== project.directory ? null : plan;
+  const visiblePlan = project && (!project.directory.trim() || projectPlan?.directory !== project.directory) ? null : plan;
   const needsSourceConfirmation = summaryPlan && (summaryPlan.durableCandidates.length > 1 || summaryPlan.durableCandidates.some(({ match }) => match === "related"));
 
   return (

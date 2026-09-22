@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Maximize2, Minus, Plus, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Maximize2, Minus, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -135,6 +135,6 @@ export function UsageChart(props: Props) {
     <p className="mt-3 text-xs leading-5 text-muted-foreground">Drag to select; Shift + drag to pan. Zoom clips whole hourly totals. Quota is account-wide and stays unchanged by model filters. Gaps over five minutes, conflicting readings and new cycles are not connected.</p>
   </>;
   return <Dialog open={expanded} onOpenChange={setExpanded}><Card><CardHeader className="flex-row items-start justify-between gap-3"><div><CardTitle>Tokens and remaining quota</CardTitle><CardDescription className="mt-1">Hourly stacks by model, reasoning effort and speed</CardDescription></div><DialogTrigger asChild><Button variant="outline" size="sm"><Maximize2 className="size-4" />Fullscreen</Button></DialogTrigger></CardHeader><CardContent>{!expanded && content}</CardContent>
-    <DialogContent className="h-[100dvh] max-h-[100dvh] w-screen max-w-none overflow-y-auto rounded-none p-4 sm:max-w-none sm:p-6"><DialogTitle className="flex items-center justify-between pr-10">Tokens and remaining quota<Button variant="outline" size="sm" onClick={() => setExpanded(false)}><X className="size-4" />Close fullscreen</Button></DialogTitle><DialogDescription>Adjust the chart range. Press Escape to return to the report.</DialogDescription>{expanded && content}</DialogContent>
+    <DialogContent className="h-[100dvh] max-h-[100dvh] w-screen max-w-none overflow-y-auto rounded-none p-4 sm:max-w-none sm:p-6"><DialogTitle className="pr-10">Tokens and remaining quota</DialogTitle><DialogDescription>Adjust the chart range. Press Escape to return to the report.</DialogDescription>{expanded && content}</DialogContent>
   </Card></Dialog>;
 }

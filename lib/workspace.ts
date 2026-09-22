@@ -1,6 +1,6 @@
 export type Workspace = "search" | "databases" | "memory" | "sessions" | "usage";
 
-export const DEFAULT_WORKSPACE: Workspace = "databases";
+export const DEFAULT_WORKSPACE: Workspace = "search";
 export const WORKSPACE_COOKIE_NAME = "codex-explorer.workspace";
 
 export function isWorkspace(value: string | undefined): value is Workspace {

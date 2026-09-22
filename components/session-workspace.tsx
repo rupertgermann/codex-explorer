@@ -2,22 +2,18 @@
 
 import { ModuleSidebar } from "@/components/module-sidebar";
 
-import { FormEvent, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { FormEvent, memo, useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   Bot,
   Braces,
-  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  FileJson2,
-  Folder,
   GitBranch,
-  HardDrive,
   Loader2,
   List,
   MessageSquareText,
@@ -153,22 +149,11 @@ function ProvenanceBadge({ provenance }: { provenance: SessionProvenance }) {
   )}>{provenanceLabels[provenance]}</Badge>;
 }
 
-function Metric({ label, value, detail, icon: Icon }: { label: string; value: string; detail: string; icon: typeof HardDrive }) {
-  return (
-    <Card>
-      <CardContent className="flex items-start justify-between p-4">
-        <div><p className="text-[10px] font-semibold uppercase tracking-[0.1em] text-muted-foreground">{label}</p><p className="mt-1.5 text-xl font-semibold tracking-[-0.03em]">{value}</p><p className="mt-1 text-[11px] text-muted-foreground">{detail}</p></div>
-        <span className="rounded-lg bg-violet-50 p-2 text-violet-700"><Icon className="size-4" /></span>
-      </CardContent>
-    </Card>
-  );
-}
-
 function transcriptEntryText(entry: SessionEntry) {
   return entry.kind === "tool" ? `${entry.name ?? ""} ${entry.detail ?? ""}` : entry.text ?? "";
 }
 
-function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boolean }) {
+const TranscriptEntry = memo(function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boolean }) {
   if (entry.kind === "tool") {
     return (
       <div id={`session-entry-${entry.id}`} className={cn("ml-8 rounded-xl border border-slate-200 bg-slate-50/80 px-4 py-3 scroll-mt-4", matched && "border-amber-300 bg-amber-50/70 ring-2 ring-amber-200/70")}>
@@ -189,7 +174,7 @@ function TranscriptEntry({ entry, matched }: { entry: SessionEntry; matched: boo
       </div>
     </div>
   );
-}
+});
 
 function ThreadTreeItem({
   node,
@@ -214,7 +199,7 @@ function ThreadTreeItem({
       <button type="button" disabled={!hasChildren} onClick={() => onToggle(expansionKey)} aria-expanded={hasChildren ? open : undefined} aria-label={`${open ? "Collapse" : "Expand"} ${node.session.id}`} className="grid w-7 shrink-0 place-items-center text-muted-foreground disabled:opacity-20">
         {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
       </button>
-      <button type="button" onClick={() => onSelect(node.session.path)} className="min-w-0 flex-1 px-1.5 py-2 text-left">
+      <button type="button" aria-current={selectedPath === node.session.path ? "true" : undefined} onClick={() => onSelect(node.session.path)} className="min-w-0 flex-1 px-1.5 py-2 text-left">
         <span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{node.session.project}</span><ProvenanceBadge provenance={node.session.provenance} /></span>
         <span className="mt-0.5 flex min-w-0 items-center gap-1.5"><span className="truncate font-mono text-[9px] text-muted-foreground">{node.session.id}</span>{node.contextOnly && <span className="shrink-0 text-[9px] font-medium text-slate-500">context</span>}{node.orphan && <span className="shrink-0 text-[9px] font-medium text-amber-700">missing parent</span>}{node.cycle && <span className="shrink-0 text-[9px] font-medium text-red-700">cycle</span>}</span>
         <span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(node.session.startedAt)}</span><span>{formatBytes(node.session.size)}</span></span>
@@ -224,7 +209,7 @@ function ThreadTreeItem({
   </div>;
 }
 
-export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: string; initialQuery?: string }) {
+export function SessionWorkspace({ initialPath, initialQuery, active = true }: { initialPath?: string; initialQuery?: string; active?: boolean }) {
   const [catalog, setCatalog] = useState<SessionCatalog | null>(null);
   const [session, setSession] = useState<SessionDetail | null>(null);
   const [project, setProject] = useState("All");
@@ -235,7 +220,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     selectedPath: "",
     expandedThreads: new Set<string>(),
   });
-  const [treePagination, setTreePagination] = useState({ key: "", limit: 500 });
+  const [treePagination, setTreePagination] = useState({ key: "", limit: 100 });
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SessionSummary[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -250,22 +235,31 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   const [transcriptQuery, setTranscriptQuery] = useState(initialQuery ?? "");
   const [activeTranscriptMatch, setActiveTranscriptMatch] = useState(0);
   const [message, setMessage] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const sessionAbort = useRef<AbortController | null>(null);
+  const searchAbort = useRef<AbortController | null>(null);
   const fullScanAbort = useRef<AbortController | null>(null);
   const rawPageAbort = useRef<AbortController | null>(null);
 
   const loadSession = useCallback(async (path: string) => {
+    sessionAbort.current?.abort();
+    const controller = new AbortController();
+    sessionAbort.current = controller;
     fullScanAbort.current?.abort();
+    fullScanAbort.current = null;
     rawPageAbort.current?.abort();
     rawPageAbort.current = null;
-    setSessionLoading(true); setMessage(null);
+    setSessionLoading(true); setSession(null); setMessage(null);
+    dispatchArchiveNavigation({ type: "select", path });
     setViewer("transcript"); setFullScanning(false); setFullProgress(0); setFullScanComplete(false); setRawPage(null); setRawLoading(false);
     try {
-      const detail = await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`);
+      const detail = await sessionRequest<SessionDetail>(`/api/sessions/document?path=${encodeURIComponent(path)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSession(detail);
+      if (window.innerWidth < 1024) requestAnimationFrame(() => document.getElementById("session-document")?.scrollIntoView({ block: "start" }));
       dispatchArchiveNavigation({ type: "select", path: detail.path });
     } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open session." });
-    } finally { setSessionLoading(false); }
+      if (!controller.signal.aborted) setMessage({ kind: "error", text: error instanceof Error ? error.message : "Could not open session." });
+    } finally { if (!controller.signal.aborted) setSessionLoading(false); }
   }, []);
 
   const refreshCatalog = useCallback(async () => {
@@ -294,6 +288,8 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   }, [initialPath, loadSession]);
 
   useEffect(() => () => {
+    sessionAbort.current?.abort();
+    searchAbort.current?.abort();
     fullScanAbort.current?.abort();
     rawPageAbort.current?.abort();
   }, []);
@@ -321,6 +317,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
       let buffer = "";
 
       const accept = (update: TranscriptUpdate) => {
+        if (controller.signal.aborted) return;
         if (update.type === "entry") entries.push(update.entry);
         if (update.type === "progress") {
           setFullProgress(update.totalBytes ? update.scannedBytes / update.totalBytes : 1);
@@ -347,14 +344,13 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
           break;
         }
       }
-      setMessage({ kind: "success", text: `Scanned the complete transcript (${formatNumber(entries.length)} visible entries).` });
+      if (!controller.signal.aborted) setMessage({ kind: "success", text: `Scanned the complete transcript (${formatNumber(entries.length)} visible entries).` });
     } catch (error) {
       if (!(error instanceof DOMException && error.name === "AbortError")) {
         setMessage({ kind: "error", text: error instanceof Error ? error.message : "Complete transcript scan failed." });
       }
     } finally {
-      if (fullScanAbort.current === controller) fullScanAbort.current = null;
-      setFullScanning(false);
+      if (fullScanAbort.current === controller) { fullScanAbort.current = null; setFullScanning(false); }
     }
   }
 
@@ -389,17 +385,21 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     const needle = query.trim();
     if (!needle) { setSearchResults(null); return; }
     if (needle.length < 3) { setMessage({ kind: "error", text: "Enter at least 3 characters." }); return; }
+    searchAbort.current?.abort();
+    const controller = new AbortController(); searchAbort.current = controller;
     setSearching(true); setMessage(null);
     try {
-      const data = await sessionRequest<{ results: SessionSummary[] }>(`/api/sessions/search?q=${encodeURIComponent(needle)}`);
+      const data = await sessionRequest<{ results: SessionSummary[] }>(`/api/sessions/search?q=${encodeURIComponent(needle)}`, { signal: controller.signal });
+      if (controller.signal.aborted) return;
       setSearchResults(data.results);
       setMessage({ kind: "success", text: data.results.length === 100 ? "Showing up to 100 matching sessions." : `${formatNumber(data.results.length)} matching sessions found.` });
     } catch (error) {
-      setMessage({ kind: "error", text: error instanceof Error ? error.message : "Session search failed." });
-    } finally { setSearching(false); }
+      if (!controller.signal.aborted) setMessage({ kind: "error", text: error instanceof Error ? error.message : "Session search failed." });
+    } finally { if (!controller.signal.aborted) setSearching(false); }
   }
 
   function clearSearch() {
+    searchAbort.current?.abort(); setSearching(false);
     setQuery(""); setSearchResults(null); setMessage(null);
   }
 
@@ -413,12 +413,11 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   }), [catalog, contentPaths, month, project, provenance]);
   const hasActiveFilters = project !== "All" || month !== "All" || provenance !== "All" || searchResults !== null;
   const visibleSessions = useMemo(() => (catalog?.sessions ?? []).filter((item) => matchingPaths.has(item.path)), [catalog, matchingPaths]);
-  const listedSessions = visibleSessions.slice(0, 1_000);
   const fullSessionForest = useMemo(() => buildSessionForest(catalog?.sessions ?? [], hasActiveFilters ? matchingPaths : undefined), [catalog, hasActiveFilters, matchingPaths]);
   const treeFilterKey = `${project}\n${month}\n${provenance}\n${searchResults?.map((item) => item.path).join("\n") ?? ""}`;
-  const treeRootLimit = treePagination.key === treeFilterKey ? treePagination.limit : 500;
+  const treeRootLimit = treePagination.key === treeFilterKey ? treePagination.limit : 100;
+  const listedSessions = visibleSessions.slice(0, treeRootLimit);
   const sessionForest = fullSessionForest.slice(0, treeRootLimit);
-  const maxProject = catalog?.topProjects[0]?.sessions ?? 1;
   const maxEvent = session?.eventTypes[0]?.count ?? 1;
   const canScanCompleteTranscript = Boolean(session && !fullScanComplete && (session.truncation.scanLimitReached || session.truncation.entryLimitReached));
   const transcriptMatchIds = useMemo(() => {
@@ -426,6 +425,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
     if (!needle || !session) return [];
     return session.entries.filter((entry) => transcriptEntryText(entry).toLocaleLowerCase().includes(needle)).map((entry) => entry.id);
   }, [session, transcriptQuery]);
+  const transcriptMatches = useMemo(() => new Set(transcriptMatchIds), [transcriptMatchIds]);
   const firstTranscriptMatch = transcriptMatchIds[0];
   const displayedTranscriptMatch = Math.min(activeTranscriptMatch, Math.max(0, transcriptMatchIds.length - 1));
 
@@ -446,41 +446,33 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
   const toggleThread = (key: string) => dispatchArchiveNavigation({ type: "toggle", key });
 
   if (loading && !catalog) return <div className="flex min-h-[65vh] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Indexing session metadata…</div>;
-  if (!catalog) return <div className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">{message?.text ?? "Codex sessions are unavailable."}</div>;
+  if (!catalog) return <div role="alert" className="rounded-xl border border-red-200 bg-red-50 p-5 text-sm text-red-700"><p>{message?.text ?? "Codex sessions are unavailable."}</p><Button className="mt-3" variant="outline" onClick={refreshCatalog}>Try again</Button></div>;
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge className="border-violet-200 bg-violet-50 text-violet-700"><MessageSquareText className="size-3" />JSONL corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Sessions</h1><p className="mt-1 max-w-3xl text-sm text-muted-foreground">Browse conversations, inspect tool activity, analyze projects and dates, or run an explicit full-text search across the local session archive.</p></div>
-        <div className="flex shrink-0 items-center gap-3 self-start"><span className="whitespace-nowrap text-xs text-muted-foreground">Last indexed {formatDate(catalog.indexedAt)}</span><Button variant="outline" size="sm" onClick={refreshCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button></div>
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0"><div className="mb-2 flex items-center gap-2"><Badge className="border-violet-200 bg-violet-50 text-violet-700"><MessageSquareText className="size-3" />JSONL corpus</Badge><span className="truncate text-xs text-muted-foreground">{catalog.root}</span></div><h1 className="text-2xl font-semibold tracking-[-0.035em] sm:text-3xl">Codex Sessions</h1><p className="mt-1 max-w-3xl text-sm text-muted-foreground">Read past conversations and tool calls. Filter by project, date, or origin to find a session.</p></div>
+        <div className="flex shrink-0 flex-wrap items-center gap-3 self-start"><span className="whitespace-nowrap text-xs text-muted-foreground">Last indexed {formatDate(catalog.indexedAt)}</span><Button variant="outline" size="sm" onClick={refreshCatalog} disabled={loading}><RefreshCw className={cn("size-3.5", loading && "animate-spin")} />Refresh index</Button></div>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="Sessions" value={formatNumber(catalog.totals.sessions)} detail="Recursive JSONL files" icon={FileJson2} />
-        <Metric label="Archive size" value={formatBytes(catalog.totals.bytes)} detail="Cached metadata index" icon={HardDrive} />
-        <Metric label="Projects" value={formatNumber(catalog.totals.projects)} detail="Derived from working directories" icon={Folder} />
-        <Metric label="Active days" value={formatNumber(catalog.totals.activeDays)} detail={`${catalog.months.length} calendar months`} icon={CalendarDays} />
-      </div>
+      <p className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground"><span><b className="font-medium text-foreground">{formatNumber(catalog.totals.sessions)}</b> sessions</span><span>{formatBytes(catalog.totals.bytes)}</span><span>{catalog.totals.projects} projects</span><span>{catalog.totals.activeDays} active days</span></p>
 
-      {message && <div className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
+      {message && <div role={message.kind === "error" ? "alert" : "status"} className={cn("flex items-center justify-between rounded-lg border px-4 py-3 text-sm", message.kind === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-red-200 bg-red-50 text-red-700")}><span className="flex items-center gap-2">{message.kind === "success" ? <CheckCircle2 className="size-4" /> : <AlertTriangle className="size-4" />}{message.text}</span><button onClick={() => setMessage(null)} aria-label="Dismiss message"><X className="size-4" /></button></div>}
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)] 2xl:grid-cols-[minmax(0,1fr)_300px]">
-        <ModuleSidebar><Card className="min-w-0 overflow-hidden lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:rounded-none lg:border-0 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
-          <CardHeader className="border-b p-4 lg:border-white/10"><div className="flex items-start justify-between gap-2"><div><CardTitle className="text-sm">Session archive</CardTitle><CardDescription>{searchResults ? `${visibleSessions.length} search results` : `${visibleSessions.length} indexed sessions`}</CardDescription></div><div className="sidebar-form-border flex rounded-lg border bg-muted/50 p-0.5 lg:bg-white/[0.06]"><button type="button" aria-pressed={archiveView === "list"} onClick={() => setArchiveView("list")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "list" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><List className="size-3" />List</button><button type="button" aria-pressed={archiveView === "tree"} onClick={() => setArchiveView("tree")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "tree" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><GitBranch className="size-3" />Tree</button></div></div><form onSubmit={search} className="flex gap-2 pt-2"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search session contents…" className="sidebar-form-border pl-9 pr-8 lg:bg-white/[0.06] lg:text-white lg:placeholder:text-slate-500" />{query && <button type="button" onClick={clearSearch} aria-label="Clear session search" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div><Button type="submit" size="icon" variant="outline" disabled={searching} aria-label="Search sessions" className="sidebar-form-border lg:bg-white/[0.06] lg:text-slate-300 lg:hover:bg-white/10 lg:hover:text-white">{searching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}</Button></form><p className="text-[10px] leading-4 text-muted-foreground">Search runs only when submitted and may scan the complete archive for up to 20 seconds.</p><div className="grid gap-2 pt-1"><select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter sessions by project" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All projects</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Filter sessions by month" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All months</option>{catalog.months.map((item) => <option key={item.month} value={item.month}>{monthLabel(item.month)}</option>)}</select><select value={provenance} onChange={(event) => setProvenance(event.target.value as "All" | SessionProvenance)} aria-label="Filter sessions by provenance" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All origins</option>{Object.entries(provenanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div></CardHeader>
+      <div className="grid min-w-0 gap-5">
+        <ModuleSidebar active={active}><Card className="min-w-0 overflow-hidden lg:flex lg:h-full lg:min-h-0 lg:flex-col lg:rounded-none lg:border-0 lg:bg-[#17202d] lg:text-white lg:[&_.text-muted-foreground]:text-slate-400">
+          <CardHeader className="border-b p-4 lg:border-white/10"><div className="flex items-start justify-between gap-2"><div><CardTitle className="text-sm">Session archive</CardTitle><CardDescription>{searchResults ? `${visibleSessions.length} search results` : `${visibleSessions.length} indexed sessions`}</CardDescription></div><div className="sidebar-form-border flex rounded-lg border bg-muted/50 p-0.5 lg:bg-white/[0.06]"><button type="button" aria-pressed={archiveView === "list"} onClick={() => setArchiveView("list")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "list" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><List className="size-3" />List</button><button type="button" aria-pressed={archiveView === "tree"} onClick={() => setArchiveView("tree")} className={cn("flex items-center gap-1 rounded-md px-2 py-1 text-[10px] font-medium lg:text-slate-400", archiveView === "tree" && "bg-white shadow-sm lg:bg-white/10 lg:text-white")}><GitBranch className="size-3" />Tree</button></div></div><form onSubmit={search} className="flex gap-2 pt-2"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" /><Input aria-label="Search session contents" minLength={3} maxLength={200} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search session contents…" className="sidebar-form-border pl-9 pr-8 lg:bg-white/[0.06] lg:text-white lg:placeholder:text-slate-400" />{query && <button type="button" onClick={clearSearch} aria-label="Clear session search" className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground"><X className="size-3.5" /></button>}</div><Button type="submit" size="icon" variant="outline" disabled={searching} aria-label="Search sessions" className="sidebar-form-border lg:bg-white/[0.06] lg:text-slate-300 lg:hover:bg-white/10 lg:hover:text-white">{searching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}</Button></form><p className="text-[10px] leading-4 text-muted-foreground">Enter 3+ characters. Searches may take up to 20 seconds.</p><div className="grid gap-2 pt-1"><select value={project} onChange={(event) => setProject(event.target.value)} aria-label="Filter sessions by project" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All projects</option>{projects.map((item) => <option key={item} value={item}>{item}</option>)}</select><select value={month} onChange={(event) => setMonth(event.target.value)} aria-label="Filter sessions by month" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All months</option>{catalog.months.map((item) => <option key={item.month} value={item.month}>{monthLabel(item.month)}</option>)}</select><select value={provenance} onChange={(event) => setProvenance(event.target.value as "All" | SessionProvenance)} aria-label="Filter sessions by provenance" className="sidebar-form-border h-8 min-w-0 rounded-lg border bg-white px-2 text-xs lg:bg-white/[0.06] lg:text-slate-200 lg:[&>option]:bg-white lg:[&>option]:text-slate-900"><option value="All">All origins</option>{Object.entries(provenanceLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></div>{hasActiveFilters && <button type="button" onClick={() => { setProject("All"); setMonth("All"); setProvenance("All"); clearSearch(); }} className="mt-1 text-left text-xs font-medium text-indigo-700 underline underline-offset-4 lg:text-indigo-200">Reset filters</button>}</CardHeader>
           <CardContent
-            className="scrollbar-thin max-h-[760px] overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1"
-            onScroll={(event) => {
-              const viewport = event.currentTarget;
-              if (archiveView === "tree" && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 120 && sessionForest.length < fullSessionForest.length) {
-                setTreePagination({ key: treeFilterKey, limit: treeRootLimit + 500 });
-              }
-            }}
+            className="scrollbar-thin max-h-72 overflow-y-auto p-2 lg:min-h-0 lg:max-h-none lg:flex-1"
+
           >
-            {archiveView === "list" ? <>{listedSessions.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No sessions match the current filters.</p> : <div className="space-y-1">{listedSessions.map((item) => <button key={item.path} onClick={() => loadSession(item.path)} className={cn("w-full rounded-lg px-2.5 py-2.5 text-left transition hover:bg-muted lg:hover:bg-white/[0.06]", session?.path === item.path && "bg-violet-50 text-violet-950 lg:bg-violet-400/10 lg:text-violet-100")}><span className="flex items-start gap-2.5"><span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", session?.path === item.path ? "bg-violet-100 text-violet-700 lg:bg-violet-400/10 lg:text-violet-300" : "bg-muted text-muted-foreground lg:bg-white/[0.06]")}><MessageSquareText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{item.project}</span><ProvenanceBadge provenance={item.provenance} /></span><span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">{item.id}</span><span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(item.startedAt)}</span><span>{formatBytes(item.size)}</span></span></span></span></button>)}</div>}{visibleSessions.length > listedSessions.length && <p className="p-3 text-center text-[10px] text-muted-foreground">Showing the first {listedSessions.length} sessions. Narrow the filters to see more.</p>}</> : sessionForest.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No threads match the current filters.</p> : <div className="space-y-1">{sessionForest.map((node) => <ThreadTreeItem key={node.session.path} node={node} expanded={expandedThreads} selectedPath={session?.path} onToggle={toggleThread} onSelect={loadSession} />)}</div>}
+            {archiveView === "list" ? <>{listedSessions.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No sessions match the current filters.</p> : <div className="space-y-1">{listedSessions.map((item) => <button key={item.path} aria-current={session?.path === item.path ? "true" : undefined} onClick={() => loadSession(item.path)} className={cn("w-full rounded-lg px-2.5 py-2.5 text-left transition hover:bg-muted lg:hover:bg-white/[0.06]", session?.path === item.path && "bg-violet-50 text-violet-950 lg:bg-violet-400/10 lg:text-violet-100")}><span className="flex items-start gap-2.5"><span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg", session?.path === item.path ? "bg-violet-100 text-violet-700 lg:bg-violet-400/10 lg:text-violet-300" : "bg-muted text-muted-foreground lg:bg-white/[0.06]")}><MessageSquareText className="size-3.5" /></span><span className="min-w-0 flex-1"><span className="flex items-center justify-between gap-1.5"><span className="min-w-0 truncate text-xs font-semibold">{item.project}</span><ProvenanceBadge provenance={item.provenance} /></span><span className="mt-0.5 block truncate font-mono text-[9px] text-muted-foreground">{item.id}</span><span className="mt-1 flex items-center justify-between gap-2 text-[9px] text-muted-foreground"><span>{formatDate(item.startedAt)}</span><span>{formatBytes(item.size)}</span></span></span></span></button>)}</div>}</> : sessionForest.length === 0 ? <p className="p-6 text-center text-xs text-muted-foreground">No threads match the current filters.</p> : <div className="space-y-1">{sessionForest.map((node) => <ThreadTreeItem key={node.session.path} node={node} expanded={expandedThreads} selectedPath={archiveNavigation.selectedPath} onToggle={toggleThread} onSelect={loadSession} />)}</div>}
+            {(archiveView === "tree" ? sessionForest.length < fullSessionForest.length : listedSessions.length < visibleSessions.length) && <Button variant="ghost" className="mt-2 w-full lg:hover:bg-white/10 lg:hover:text-white" onClick={() => setTreePagination({ key: treeFilterKey, limit: treeRootLimit + 100 })}>Show more sessions</Button>}
+
           </CardContent>
         </Card></ModuleSidebar>
 
-        <Card className="min-w-0 overflow-hidden">
+        <Card id="session-document" className="min-w-0 scroll-mt-20 overflow-hidden">
           {session ? <>
             <div className="border-b px-4 py-3">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -530,9 +522,9 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
               <button onClick={() => selectViewer("raw")} className="shrink-0 font-semibold underline underline-offset-2">View raw</button>
             </div>}
 
-            {viewer === "transcript" ? <div className="scrollbar-thin max-h-[760px] min-h-[620px] space-y-4 overflow-y-auto bg-slate-50/60 p-4 sm:p-5">
+            {viewer === "transcript" ? <div role="region" aria-label="Session transcript" tabIndex={0} className="scrollbar-thin max-h-[760px] min-h-[360px] sm:min-h-[620px] space-y-4 overflow-y-auto bg-slate-50/60 p-4 sm:p-5">
               {sessionLoading ? <div className="flex min-h-[580px] items-center justify-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" />Reading session…</div>
-                : session.entries.length ? session.entries.map((entry) => <TranscriptEntry key={entry.id} entry={entry} matched={transcriptMatchIds.includes(entry.id)} />)
+                : session.entries.length ? session.entries.map((entry) => <TranscriptEntry key={entry.id} entry={entry} matched={transcriptMatches.has(entry.id)} />)
                   : <div className="flex min-h-[580px] items-center justify-center text-sm text-muted-foreground">No human messages or tool calls were found in the scanned portion.</div>}
             </div> : <div className="min-h-[620px] bg-[#111827] text-slate-200">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 px-4 py-2 text-[10px] text-slate-400">
@@ -543,7 +535,7 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
                 </span>
                 <span className="flex items-center gap-1">
                   <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.offset === 0} onClick={() => void loadRawPage(0)} aria-label="First raw page"><ChevronsLeft className="size-3.5" /></Button>
-                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || rawPage?.previousOffset === null} onClick={() => rawPage && void loadRawPage(rawPage.previousOffset ?? 0)} aria-label="Previous raw page"><ChevronLeft className="size-3.5" /></Button>
+                  <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.previousOffset === null} onClick={() => rawPage && void loadRawPage(rawPage.previousOffset ?? 0)} aria-label="Previous raw page"><ChevronLeft className="size-3.5" /></Button>
                   <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => { const offset = rawPage?.nextOffset; if (offset !== null && offset !== undefined) void loadRawPage(offset); }} aria-label="Next raw page"><ChevronRight className="size-3.5" /></Button>
                   <Button size="icon" variant="ghost" className="size-7 text-slate-300 hover:bg-slate-700 hover:text-white" disabled={rawLoading || !rawPage || rawPage.nextOffset === null} onClick={() => rawPage && void loadRawPage(Math.max(0, rawPage.fileSize - rawPage.byteLimit))} aria-label="Last raw page"><ChevronsRight className="size-3.5" /></Button>
                 </span>
@@ -553,14 +545,12 @@ export function SessionWorkspace({ initialPath, initialQuery }: { initialPath?: 
             </div>}
 
             <div className="flex flex-wrap items-center justify-between gap-2 border-t px-4 py-2 text-[10px] text-muted-foreground"><span>{session.project} · {session.source} · {session.originator}</span><span>Started {formatDate(session.startedAt)} · {formatBytes(session.size)} · read-only</span></div>
-          </> : <div className="flex min-h-[720px] items-center justify-center text-sm text-muted-foreground">Select a session.</div>}
+          </> : <div role="status" className="flex min-h-[360px] items-center justify-center gap-2 p-6 text-center text-sm text-muted-foreground">{sessionLoading ? <><Loader2 className="size-4 animate-spin" />Reading session…</> : catalog.sessions.length ? "Select a session from the archive." : "No sessions found. Conversations will appear here after you use Codex."}</div>}
         </Card>
 
-        <div className="space-y-5 xl:grid xl:grid-cols-3 xl:gap-5 xl:space-y-0 2xl:block 2xl:space-y-5">
-          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Folder className="size-4 text-violet-600" />Top projects</CardTitle><CardDescription>Sessions by working directory</CardDescription></CardHeader><CardContent className="space-y-2.5">{catalog.topProjects.slice(0, 10).map((item) => <button key={item.project} onClick={() => setProject(item.project)} className="block w-full text-left"><div className="mb-1 flex items-center justify-between gap-3 text-[11px]"><span className="truncate">{item.project}</span><span className="shrink-0 tabular-nums text-muted-foreground">{formatNumber(item.sessions)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-violet-500" style={{ width: `${Math.max(4, item.sessions / maxProject * 100)}%` }} /></div></button>)}</CardContent></Card>
-          <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><CalendarDays className="size-4 text-indigo-500" />Monthly activity</CardTitle><CardDescription>Recent archive volume</CardDescription></CardHeader><CardContent className="space-y-2">{catalog.months.slice(0, 10).map((item) => <button key={item.month} onClick={() => setMonth(item.month)} className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-xs hover:bg-muted"><span>{monthLabel(item.month)}</span><span className="text-right"><b className="font-semibold">{formatNumber(item.sessions)}</b><small className="ml-2 text-[9px] text-muted-foreground">{formatBytes(item.bytes)}</small></span></button>)}</CardContent></Card>
+        <details className="rounded-xl border bg-white p-4"><summary className="cursor-pointer text-sm font-medium">Session event breakdown</summary><div className="mt-3">
           <Card><CardHeader><CardTitle className="flex items-center gap-2 text-sm"><Terminal className="size-4 text-cyan-600" />Selected activity</CardTitle><CardDescription>Most frequent JSONL event types</CardDescription></CardHeader><CardContent className="space-y-2.5">{session?.eventTypes.slice(0, 10).map((item) => <div key={item.type}><div className="mb-1 flex items-center justify-between gap-3 text-[10px]"><span className="truncate font-mono">{item.type}</span><span className="tabular-nums text-muted-foreground">{formatNumber(item.count)}</span></div><div className="h-1 overflow-hidden rounded-full bg-muted"><div className="h-full rounded-full bg-cyan-500" style={{ width: `${Math.max(4, item.count / maxEvent * 100)}%` }} /></div></div>) ?? <p className="text-xs text-muted-foreground">Select a session to inspect its event composition.</p>}</CardContent></Card>
-        </div>
+        </div></details>
       </div>
     </div>
   );

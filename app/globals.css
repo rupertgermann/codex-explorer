@@ -32,7 +32,7 @@
   --secondary: #eef0f4;
   --secondary-foreground: #384152;
   --muted: #f1f3f6;
-  --muted-foreground: #6f7785;
+  --muted-foreground: #606b7b;
   --accent: #eef0ff;
   --accent-foreground: #4e51d8;
   --destructive: #dc2626;
@@ -44,8 +44,14 @@
 * { border-color: var(--border); }
 html { background: var(--background); }
 body { margin: 0; min-height: 100vh; background: var(--background); color: var(--foreground); font-family: var(--font-geist), sans-serif; }
-button, select, textarea, input { font: inherit; }
 button { cursor: pointer; }
+button:disabled { cursor: default; }
+:where(button, a, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--ring); outline-offset: 3px; }
+html { scrollbar-gutter: stable; }
+.skip-link { position: fixed; left: 1rem; top: -5rem; z-index: 100; border-radius: .5rem; background: var(--card); padding: .75rem 1rem; box-shadow: 0 2px 12px #17202e22; }
+.skip-link:focus { top: 1rem; }
+summary > svg:last-child { transition: transform .15s; }
+details[open] > summary > svg:last-child { transform: rotate(90deg); }
 ::selection { background: #dfe0ff; color: #2f319b; }
 
 .scrollbar-thin { scrollbar-width: thin; scrollbar-color: #cbd0da transparent; }
@@ -68,7 +74,8 @@ button { cursor: pointer; }
 .memory-markdown code { border-radius: .25rem; background: #eef0f4; padding: .12rem .3rem; font-family: var(--font-geist-mono), monospace; font-size: .82em; }
 .memory-markdown pre code { background: transparent; padding: 0; font-size: .75rem; }
 .memory-markdown a { color: #5254db; text-decoration: underline; text-underline-offset: 2px; }
-.memory-markdown table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: .78rem; }
+.memory-markdown { overflow-wrap: anywhere; }
+.memory-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; margin: 1rem 0; font-size: .78rem; }
 .memory-markdown th, .memory-markdown td { border: 1px solid var(--border); padding: .45rem .6rem; text-align: left; }
 .memory-markdown th { background: #f5f6f8; font-weight: 650; }
 .memory-markdown hr { margin: 1.5rem 0; border-color: var(--border); }
@@ -80,4 +87,8 @@ button { cursor: pointer; }
 
 @media (min-width: 1024px) {
   .sidebar-form-border { border-color: #64748b; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
