@@ -1,3 +1,4 @@
+import { assertExternalMemoryBackup } from "./memory-backup.ts";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -172,15 +173,16 @@ export class MemoryOrphanService {
     const fresh = await this.inspect(plan.path);
     if (!fresh.eligible) throw new MemoryConflictError("The file is no longer an eligible orphan. Inspect it again.");
 
+    assertExternalMemoryBackup(this.root, this.options.backupRoot);
     const transactionRoot = join(this.options.backupRoot, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`);
     const backupPath = join(transactionRoot, "files", fresh.path);
-    mkdirSync(dirname(backupPath), { recursive: true });
-    writeFileSync(backupPath, candidate.content);
+    mkdirSync(dirname(backupPath), { recursive: true, mode: 0o700 });
+    writeFileSync(backupPath, candidate.content, { mode: 0o600 });
     if (memoryHash(readFileSync(backupPath, "utf8")) !== fresh.expectedHash) throw new Error(`Could not verify backup for ${fresh.path}.`);
 
     const manifestPath = join(transactionRoot, "manifest.json");
     const manifest = { status: "verified", path: fresh.path, revision: fresh.expectedHash, backupPath };
-    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), { mode: 0o600 });
     const verifiedManifest = JSON.parse(readFileSync(manifestPath, "utf8")) as typeof manifest;
     if (verifiedManifest.status !== "verified"
       || verifiedManifest.path !== fresh.path
