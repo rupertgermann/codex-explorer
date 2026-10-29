@@ -380,3 +380,63 @@ test("Project Apply revalidates unrelated source revisions changed during backup
     assert.deepEqual(readFileSync(plan.database.path), database);
   } finally { fs.writeFileSync = original; syncBuiltinESMExports(); }
 });
+
+for (const failure of ["persisted file corruption", "rollback backup corruption", "late resurfaced Memory"]) test(`Project Apply rejects ${failure} without committing database deletions`, async () => {
+  const source = fixture(), plan = await preview(source);
+  const before = projectBytes(source.root).map(([path, content]) => [path, content]), durable = join(source.root, "MEMORY.md");
+  const backupRoot = join(source.home, "memory-forget-backups");
+  const database = new DatabaseSync(plan.database.path, { readOnly: true });
+  const rows = database.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all();
+  const jobs = database.prepare("SELECT * FROM jobs").all();
+  database.close();
+  const corrupted = "# Corrupted surviving content\n", extra = "rollout_summaries/resurfaced.md";
+  const rename = fs.renameSync;
+  let injected = false, appliedDurable;
+  fs.renameSync = (from, to) => {
+    if (!injected && failure === "rollback backup corruption" && String(to) === join(source.root, "raw_memories.md")) {
+      injected = true;
+      writeFileSync(join(backupRoot, readdirSync(backupRoot)[0], "files", "MEMORY.md"), corrupted);
+      throw new Error("Intermediate replacement failed");
+    }
+    rename(from, to);
+    if (String(to) === durable) {
+      appliedDurable = readFileSync(durable, "utf8");
+      if (!injected && failure !== "rollback backup corruption") {
+        injected = true;
+        if (failure === "persisted file corruption") writeFileSync(durable, corrupted);
+        else writeFileSync(join(source.root, extra), "# Concurrent positive copy\n\n- Keep project routing deterministic.\n");
+      }
+    }
+  };
+  syncBuiltinESMExports();
+  let response;
+  try { response = await forgetRequest(source, { action: "apply", plan, confirmedDirectory: plan.directory }); }
+  finally { fs.renameSync = rename; syncBuiltinESMExports(); }
+  assert.equal(injected, true);
+  assert.equal(response.status, 400);
+  const message = (await response.json()).error;
+  assert.match(message, failure === "late resurfaced Memory" ? /still found targeted positive Memory/ : /rollback conflicts: MEMORY\.md/);
+  const restored = new DatabaseSync(plan.database.path, { readOnly: true });
+  try {
+    assert.deepEqual(restored.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all(), rows);
+    assert.deepEqual(restored.prepare("SELECT * FROM jobs").all(), jobs);
+  } finally { restored.close(); }
+  const manifestPath = join(backupRoot, readdirSync(backupRoot)[0], "manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const conflict = failure !== "late resurfaced Memory";
+  assert.equal(manifest.status, conflict ? "rollback-conflict" : "rolled-back");
+  assert.deepEqual(manifest.rollbackFailures, conflict ? ["MEMORY.md"] : []);
+  const unaffected = ([path]) => path !== extra && !(conflict && path === "MEMORY.md");
+  assert.deepEqual(projectBytes(source.root).map(([path, content]) => [path, content]).filter(unaffected), before.filter(unaffected));
+  if (failure === "persisted file corruption") assert.equal(readFileSync(durable, "utf8"), corrupted);
+  if (failure === "rollback backup corruption") {
+    assert.equal(readFileSync(durable, "utf8"), appliedDurable);
+    assert.notEqual(appliedDurable, corrupted);
+  }
+  for (const { path, expectedHash } of manifest.files) {
+    const content = readFileSync(join(manifestPath, "..", "files", path), "utf8");
+    if (failure === "rollback backup corruption" && path === "MEMORY.md") assert.equal(content, corrupted);
+    else assert.equal(memoryHash(content), expectedHash);
+  }
+  if (failure === "late resurfaced Memory") assert.match(readFileSync(join(source.root, extra), "utf8"), /Keep project routing deterministic/);
+});
