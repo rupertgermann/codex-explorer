@@ -4,8 +4,17 @@ import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readUsageData } from "../lib/usage-repository.ts";
-import { analyzeQuota, buildUsageReport, csvText, dimensionKey, emptyTokens, fitRange, quotaAt, zoomRange } from "../lib/usage-report.ts";
+import { readUsageData as readTelemetry } from "../lib/usage-repository.ts";
+import { analyzeQuota, buildUsageReport, csvText, dimensionKey, emptyTokens, fitRange, quotaAt, usageBuckets, zoomRange } from "../lib/usage-report.ts";
+
+// Every accounting fixture also exercises date changes and warm evidence replay.
+async function readUsageData(since, until, options) {
+  const first = await readTelemetry(since, until, options);
+  await readTelemetry(since - 100, until + 100, options);
+  const warm = await readTelemetry(since, until, options);
+  assert.deepEqual({ ...warm, generatedAt: 0 }, { ...first, generatedAt: 0 });
+  return first;
+}
 
 const epoch = Date.parse("2026-09-04T00:00:00Z") / 1000;
 const at = seconds => new Date((epoch + seconds) * 1000).toISOString();
@@ -359,4 +368,31 @@ test("an excluded restored counter cannot suppress a valid original compaction",
     assert.equal(data.events[0].sessionId, "original");
     assert.equal(data.coverage.undatedUsage, 1);
   } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("hourly activity bucketing matches clipped overlap at every boundary", () => {
+  const dims = { model: "fixture", effort: "high", speed: "normal", sessionId: "one", partial: false };
+  const intervals = [[-7200, -1], [-100, 1], [0, 3600], [3600, 7200], [3700, 3700], [7200, 10000], [10001, 11000], [-50, 11000]]
+    .map(([start, end]) => ({ ...dims, start, end }));
+  for (const hours of [1, 6]) {
+    const buckets = usageBuckets([], intervals, [], 0, 10000, hours);
+    for (const bucket of buckets) assert.equal(bucket.activeSeconds, intervals.reduce((sum, interval) => sum + Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start)), 0));
+  }
+  assert.deepEqual(usageBuckets([], [], [], 0, 0, 1), []);
+});
+
+test("daily activity preserves local midnight across spring and autumn DST", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Europe/Berlin";
+  try {
+    for (const [date, expectedHours] of [["2026-03-28T00:00:00", [24, 23, 24]], ["2026-10-24T00:00:00", [24, 25, 24]]]) {
+      const start = new Date(date), end = new Date(date); end.setDate(end.getDate() + 3);
+      const since = start.getTime() / 1000, until = end.getTime() / 1000;
+      const intervals = [{ model: "fixture", effort: "high", speed: "normal", sessionId: "one", start: since - 1, end: until + 1, partial: false }];
+      const buckets = usageBuckets([], intervals, [], since, until, 24);
+      assert.deepEqual(buckets.map(b => (b.end - b.start) / 3600), expectedHours);
+      assert.deepEqual(buckets.map(b => b.activeSeconds / 3600), expectedHours);
+      assert.ok(buckets.every(b => new Date(b.start * 1000).getHours() === 0));
+    }
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });

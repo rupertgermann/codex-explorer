@@ -1,5 +1,8 @@
+import { SessionFileCache, sessionFileRevision } from "./session-file-cache.ts";
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, lstatSync, openSync, closeSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { readdir } from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
@@ -93,7 +96,7 @@ export type RawSessionPage = {
   text: string;
 };
 
-type JsonRecord = {
+export type JsonRecord = {
   timestamp?: unknown;
   type?: unknown;
   payload?: unknown;
@@ -107,6 +110,7 @@ const ENTRY_TEXT_LIMIT = 100_000;
 const SEARCH_TIMEOUT_MS = 20_000;
 const PROGRESS_INTERVAL = 4 * 1024 * 1024;
 const sessionCatalogCache = new Map<string, SessionCatalog>();
+const summaryCache = new SessionFileCache<SessionSummary>(8 * 1024 * 1024);
 
 export class SessionPathError extends Error {
   constructor(message = "The requested JSONL file is outside the sessions directory.") {
@@ -163,10 +167,23 @@ function sessionPaths(root: string, directory = root): string[] {
   });
 }
 
-async function firstRecord(path: string): Promise<JsonRecord | null> {
+async function* catalogPaths(root: string, signal?: AbortSignal, directory = root): AsyncGenerator<string> {
+  signal?.throwIfAborted();
+  if (!existsSync(directory)) return;
+  let visited = 0;
+  for (const entry of await readdir(directory, { withFileTypes: true })) {
+    if (++visited % 128 === 0) await setImmediate();
+    signal?.throwIfAborted();
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) yield* catalogPaths(root, signal, path);
+    else if (entry.isFile() && isSessionFile(entry.name) && !(entry.name.endsWith(".zst") && existsSync(path.slice(0, -4)))) yield relative(root, path);
+  }
+}
+
+async function firstRecord(path: string, signal?: AbortSignal): Promise<JsonRecord | null> {
   const parts: Buffer[] = [];
   let bytes = 0;
-  for await (const chunk of sessionStream(path)) {
+  for await (const chunk of sessionStream(path, signal)) {
     const buffer = Buffer.from(chunk);
     const newline = buffer.indexOf(10);
     const part = buffer.subarray(0, Math.min(newline < 0 ? buffer.length : newline, 128 * 1024 - bytes));
@@ -192,15 +209,19 @@ function sessionProvenance(payload: Record<string, unknown>): SessionProvenance 
   return "unknown";
 }
 
-async function summary(root: string, path: string): Promise<SessionSummary> {
+async function summary(root: string, path: string, signal?: AbortSignal): Promise<SessionSummary> {
   const absolutePath = join(root, path);
+  signal?.throwIfAborted();
+  const revision = sessionFileRevision(absolutePath);
+  const cached = summaryCache.get(absolutePath, revision);
+  if (cached) return { ...cached, path };
   const file = statSync(absolutePath);
-  const record = await firstRecord(absolutePath);
+  const record = await firstRecord(absolutePath, signal);
   const payload = record?.type === "session_meta" ? object(record.payload) : {};
   const cwd = string(payload.cwd);
   const spawn = object(object(object(payload.source).subagent).thread_spawn);
   const parentThreadId = string(payload.parent_thread_id) || string(spawn.parent_thread_id);
-  return {
+  const result: SessionSummary = {
     id: string(payload.id) || basename(sessionFileKey(path), ".jsonl"),
     path,
     filename: basename(path),
@@ -214,6 +235,9 @@ async function summary(root: string, path: string): Promise<SessionSummary> {
     provenance: sessionProvenance(payload),
     parentThreadId,
   };
+  signal?.throwIfAborted();
+  if (sessionFileRevision(absolutePath) === revision) summaryCache.set(absolutePath, revision, result, Buffer.byteLength(JSON.stringify(result)) + 128);
+  return result;
 }
 
 function clipped(value: string, limit: number) {
@@ -461,12 +485,15 @@ export class SessionRepository {
     this.root = resolve(root);
   }
 
-  async catalog(options: { refresh?: boolean } = {}): Promise<SessionCatalog> {
+  async catalog(options: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<SessionCatalog> {
+    options.signal?.throwIfAborted();
     const cached = sessionCatalogCache.get(this.root);
     if (cached && !options.refresh) return cached;
 
     const sessions: SessionSummary[] = [];
-    for (const path of sessionPaths(this.root)) sessions.push(await summary(this.root, path));
+    for await (const path of catalogPaths(this.root, options.signal)) sessions.push(await summary(this.root, path, options.signal));
+    options.signal?.throwIfAborted();
+    summaryCache.prune(this.root, new Set(sessions.map(session => join(this.root, session.path))));
     sessions.sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path));
     const projects = new Map<string, { sessions: number; bytes: number }>();
     const months = new Map<string, { sessions: number; bytes: number }>();
@@ -495,6 +522,7 @@ export class SessionRepository {
         .sort((left, right) => right.sessions - left.sessions || right.bytes - left.bytes || left.project.localeCompare(right.project))
         .slice(0, 20),
     };
+    options.signal?.throwIfAborted();
     sessionCatalogCache.set(this.root, catalog);
     return catalog;
   }

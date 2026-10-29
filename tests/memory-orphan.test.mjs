@@ -15,7 +15,7 @@ function fixture() {
   const memoryRoot = join(base, "memories");
   const activeSessionsRoot = join(base, "sessions");
   const archivedSessionsRoot = join(base, "archived_sessions");
-  const backupRoot = join(base, "backups");
+  const backupRoot = join(base, "memories-backups");
   mkdirSync(join(memoryRoot, "rollout_summaries"), { recursive: true });
   mkdirSync(activeSessionsRoot, { recursive: true });
   mkdirSync(archivedSessionsRoot, { recursive: true });

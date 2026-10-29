@@ -243,6 +243,7 @@ function displayCell(value: JsonValue, column: string) {
 
 function prettyValue(value: JsonValue) {
   if (typeof value !== "string") return String(value);
+  if (/^-?\d+$/.test(value)) return value; // SQLite integers can exceed JavaScript number precision.
   try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
 }
 

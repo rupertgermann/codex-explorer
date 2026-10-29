@@ -3,7 +3,8 @@ import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { atomicMemoryWrite } from "./memory.ts";
-import { SessionRepository, scanJsonl, sessionFileKey } from "./sessions.ts";
+import { SessionRepository, sessionFileKey } from "./sessions.ts";
+import { pruneUsageTelemetry, scanUsageTelemetry } from "./usage-telemetry.ts";
 import { TOKEN_FIELDS, dimensionKey, emptyTokens, type ActivityInterval, type Dimensions, type Tokens, type UsageData, type UsageEvent } from "./usage-report.ts";
 
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -69,6 +70,7 @@ export async function generateUsageData(since: number, until: number, options: U
 /** On-demand, read-only scan. Adapted from extract_usage.py and active_intervals(). */
 export async function readUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) throw new Error("Choose a valid start and a later end.");
+  options.signal?.throwIfAborted();
   const { home, roots } = usageSource(options);
   const names = new Map<string, string>();
   const index = join(home, "session_index.jsonl");
@@ -84,7 +86,8 @@ export async function readUsageData(since: number, until: number, options: Usage
   const accountedCompactions = new Set<string>();
   const initialSnapshots: { event: UsageEvent; total: Tokens; last: Tokens }[] = [];
   const counterSnapshots: { sessionId: string; source: string; t: number; total: Tokens }[] = [];
-  const catalogs = await Promise.all(roots.map(async root => ({ root, sessions: (await new SessionRepository(root).catalog({ refresh: true })).sessions })));
+  const catalogs = await Promise.all(roots.map(async root => ({ root, sessions: (await new SessionRepository(root).catalog({ refresh: true, signal: options.signal })).sessions })));
+  for (const { root, sessions } of catalogs) pruneUsageTelemetry(root, new Set(sessions.map(file => join(root, file.path))));
   const sourcesBySession = Map.groupBy(catalogs.flatMap(catalog => catalog.sessions), session => session.id);
   const repeatedSessions = new Set([...sourcesBySession].filter(([, files]) => files.length > 1).map(([id]) => id));
   for (const { root, sessions } of catalogs) {
@@ -114,7 +117,7 @@ export async function readUsageData(since: number, until: number, options: Usage
         return turn?.actualStart !== undefined && turn.actualEnd !== undefined && turn.actualStart >= Math.floor(created)
           && event.t >= turn.actualStart - 2 && event.t <= turn.actualEnd + 2;
       };
-      const scan = await scanJsonl(source, Infinity, (record, line) => {
+      const scan = await scanUsageTelemetry(source, (record, line) => {
         const p = object(record.payload), type = string(p.type), t = stamp(record.timestamp);
         if (record.type === "session_meta") {
           if (line !== 1) return; // Embedded parent metadata never changes the child identity.
@@ -230,7 +233,7 @@ export async function readUsageData(since: number, until: number, options: Usage
           const last = tokens(object(p.info).last_token_usage);
           if (initial && !forked && last && validTokens(last)) initialSnapshots.push({ event, total, last });
         }
-      }, { signal: options.signal, maxRecordBytes: 32 * 1024 * 1024 });
+      }, options.signal);
       data.coverage.skippedRecords += scan.skippedLines;
       if (rewritten) data.coverage.rewrittenSessions++;
       for (const responseId of compacted) {

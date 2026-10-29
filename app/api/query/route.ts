@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     try {
       const statement = db.prepare(sql);
       statement.setAllowBareNamedParameters(true);
+      statement.setReadBigInts(true);
       const columns = [...new Set(statement.columns().map((column) => column.name))];
       const collected: Record<string, unknown>[] = [];
       let limited = false;
