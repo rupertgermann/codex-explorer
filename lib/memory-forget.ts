@@ -350,7 +350,7 @@ export class MemoryForgetService {
     };
   }
 
-  previewProject(selection: ProjectForgetSelection, database?: DatabaseSync): ProjectForgetPlan {
+  async previewProject(selection: ProjectForgetSelection, database?: DatabaseSync): Promise<ProjectForgetPlan> {
     const repository = new MemoryRepository(this.root);
     const documents = repository.catalog().files.map(({ path }) => repository.read(path));
     const contents = new Map(documents.map(({ path, content }) => [path, content]));
@@ -358,8 +358,8 @@ export class MemoryForgetService {
     const groups = projectGroups(durable);
     const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
     const sessions = [
-      ...new SessionRepository(codexSessionsRoot()).catalog({ refresh: true }).sessions,
-      ...new SessionRepository(process.env.CODEX_ARCHIVED_SESSIONS_DIRECTORY || join(codexHome, "archived_sessions")).catalog({ refresh: true }).sessions,
+      ...(await new SessionRepository(codexSessionsRoot()).catalog({ refresh: true })).sessions,
+      ...(await new SessionRepository(process.env.CODEX_ARCHIVED_SESSIONS_DIRECTORY || join(codexHome, "archived_sessions")).catalog({ refresh: true })).sessions,
     ];
     const directory = projectDirectory(selection.directory);
     const blockers: string[] = [];
@@ -529,11 +529,11 @@ export class MemoryForgetService {
     return plan;
   }
 
-  apply(plan: ForgetPlan | ProjectForgetPlan, confirmedDirectory?: string): ForgetResult {
+  async apply(plan: ForgetPlan | ProjectForgetPlan, confirmedDirectory?: string): Promise<ForgetResult> {
     if ("kind" in plan) {
       if (confirmedDirectory !== plan.directory) throw new Error("Confirm the exact project directory before applying its Forget plan.");
       if (!plan.actionable) throw new Error("The Project Forget plan is blocked.");
-      if (JSON.stringify(this.previewProject(plan.selection)) !== JSON.stringify(plan)) {
+      if (JSON.stringify(await this.previewProject(plan.selection)) !== JSON.stringify(plan)) {
         throw new MemoryConflictError("The Project Forget plan changed. Refresh its preview and confirm it again.");
       }
     } else {
@@ -621,7 +621,7 @@ export class MemoryForgetService {
         }
       }
       // Revalidate the complete preview after backup, with database writers excluded.
-      if (project && JSON.stringify(this.previewProject(project.selection, database)) !== JSON.stringify(project)) {
+      if (project && JSON.stringify(await this.previewProject(project.selection, database)) !== JSON.stringify(project)) {
         throw new MemoryConflictError("The Project Forget plan became stale during backup. Refresh its preview.");
       }
       for (const [path, content] of outputs) {
@@ -666,7 +666,7 @@ export class MemoryForgetService {
           }
         }
       }
-      const verification = "kind" in plan ? this.recheckProject(plan, database) : this.recheck(plan);
+      const verification = "kind" in plan ? await this.recheckProject(plan, database) : this.recheck(plan);
       if (verification.status === "resurfaced") {
         throw new Error("Post-apply verification still found targeted positive Memory.");
       }
@@ -711,8 +711,8 @@ export class MemoryForgetService {
     } finally { database?.close(); }
   }
 
-  private recheckProject(plan: ProjectForgetPlan, database?: DatabaseSync) {
-    const fresh = this.previewProject(plan.selection, database);
+  private async recheckProject(plan: ProjectForgetPlan, database?: DatabaseSync) {
+    const fresh = await this.previewProject(plan.selection, database);
     const positive = (sections: ForgetSection[]) => sections.flatMap((section) =>
       bulletSections(section.path, section.kind, section.content).map(({ content }) => canonical(content)));
     const targets = new Set(positive(plan.sections));

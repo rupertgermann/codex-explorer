@@ -8,7 +8,7 @@ export function GET(request: NextRequest) {
   const path = request.nextUrl.searchParams.get("path") ?? "";
   const repository = new SessionRepository();
   try {
-    repository.rawPage(path, { byteLimit: 64 });
+    repository.resolveSessionPath(path);
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not scan session transcript." },

@@ -4,9 +4,9 @@ import { SessionRepository } from "@/lib/sessions";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    return NextResponse.json(new SessionRepository().catalog({ refresh: request.nextUrl.searchParams.get("refresh") === "1" }), {
+    return NextResponse.json(await new SessionRepository().catalog({ refresh: request.nextUrl.searchParams.get("refresh") === "1" }), {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

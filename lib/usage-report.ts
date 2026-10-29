@@ -3,7 +3,7 @@
 export const TOKEN_FIELDS = ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"] as const;
 export type Tokens = Record<typeof TOKEN_FIELDS[number], number>;
 export type Dimensions = { model: string; effort: string; speed: "fast" | "normal" | "unknown" };
-export type UsageEvent = Dimensions & { t: number; sessionId: string; turn: string; usage: Tokens; source: string; line: number };
+export type UsageEvent = Dimensions & { t: number; sessionId: string; turn: string; usage: Tokens; source: string; line: number; responseId?: string };
 export type ActivityInterval = Dimensions & { sessionId: string; turn?: string; start: number; end: number; partial: boolean };
 export type UsageSession = { id: string; title: string; project: string; parent: string; sources: string[] };
 export type QuotaSnapshot = Dimensions & { t: number; sessionId: string; usedPercent: number; resetsAt: number; limitId: string; windowMinutes: number; source: string; line: number; reliable: boolean };
@@ -83,10 +83,12 @@ export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
   const events = data.events.filter(e => matchesUsage(e, filter));
   const measuredTurns = new Set(data.events.map(e => JSON.stringify([e.sessionId, e.turn])));
   const intervals = data.intervals.filter(i => matchesUsage(i, filter) && (i.turn === undefined || measuredTurns.has(JSON.stringify([i.sessionId, i.turn]))));
+  const eventsBySession = Map.groupBy(events, e => e.sessionId);
+  const intervalsBySession = Map.groupBy(intervals, i => i.sessionId);
   const sessions = data.sessions.flatMap(session => {
-    const own = events.filter(e => e.sessionId === session.id);
+    const own = eventsBySession.get(session.id) ?? [];
     if (!own.length) return [];
-    const parts = intervals.filter(i => i.sessionId === session.id);
+    const parts = intervalsBySession.get(session.id) ?? [];
     const start = Math.min(...own.map(e => e.t), ...parts.map(i => i.start));
     const end = Math.max(...own.map(e => e.t), ...parts.map(i => i.end));
     const activeSeconds = parts.reduce((n, i) => n + i.end - i.start, 0);
@@ -120,10 +122,13 @@ export function analyzeQuota(data: UsageData, bucket: string, minimumMinutes = 1
     if (!resetGroups.length || reset - resetGroups.at(-1)![0] > 60) resetGroups.push([]);
     resetGroups.at(-1)!.push(reset);
   }
+  const activity = [...data.intervals].sort((a, b) => a.start - b.start);
   const cycles: { id: number; start: number; end: number; reset: number; firstPercent: number; highPercent: number; stale: number }[] = [];
   const series: QuotaSegment[] = [], windows: QuotaWindow[] = [];
   for (const resets of resetGroups) {
     const rows = snapshots.filter(s => resets.includes(s.resetsAt)).sort((a, b) => a.t - b.t || a.sessionId.localeCompare(b.sessionId) || a.line - b.line);
+    let activityIndex = 0;
+    let active: ActivityInterval[] = [];
     let high = rows[0].usedPercent, previous: QuotaSnapshot | undefined, previousHigh = high, connected = false;
     const cycle = { id: cycles.length + 1, start: rows[0].t, end: rows.at(-1)!.t, reset: resets[0], firstPercent: high, highPercent: high, stale: 0 };
     for (const row of rows) {
@@ -136,7 +141,10 @@ export function analyzeQuota(data: UsageData, bucket: string, minimumMinutes = 1
         connected = true;
       }
       if (previous) {
-        const { owner, category: initial } = quotaOwner(previous.t, row.t, data.intervals);
+        const start = previous.t;
+        while (activityIndex < activity.length && activity[activityIndex].start < row.t) active.push(activity[activityIndex++]);
+        active = active.filter(i => i.end > start);
+        const { owner, category: initial } = quotaOwner(start, row.t, active);
         let category = initial;
         if (previous.usedPercent < previousHigh || stale) category = "stale_counter";
         else if (previous.usedPercent >= 100 || row.usedPercent >= 100) category = "quota_at_100";

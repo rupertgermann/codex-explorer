@@ -31,11 +31,11 @@ export async function POST(request: Request) {
     const service = new MemoryOrphanService(codexMemoryRoot());
     if (body.action === "inspect") {
       if (typeof body.path !== "string") throw new Error("A candidate Memory Markdown path is required.");
-      return NextResponse.json(service.inspect(body.path), { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json(await service.inspect(body.path), { headers: { "Cache-Control": "no-store" } });
     }
     if (body.action === "apply") {
       if (!isPlan(body.plan) || !isConfirmation(body.confirmation)) throw new Error("A valid confirmed orphan deletion plan is required.");
-      return NextResponse.json(service.apply(body.plan, body.confirmation), { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json(await service.apply(body.plan, body.confirmation), { headers: { "Cache-Control": "no-store" } });
     }
     throw new Error("action must be inspect or apply.");
   } catch (error) {

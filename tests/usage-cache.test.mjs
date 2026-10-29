@@ -27,6 +27,8 @@ test("usage API restores the last successful report without scanning and replace
     { timestamp: new Date((since + 1) * 1000).toISOString(), type: "turn_context", payload: { turn_id: "turn", model: "test-model", effort: "high", service_tier: "priority" } },
     { timestamp: new Date((since + 10) * 1000).toISOString(), type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 90, output_tokens: 10, total_tokens: 100 } } } },
     { timestamp: new Date((since + 11) * 1000).toISOString(), type: "response_item", payload: { text: "private conversation content" } },
+    { timestamp: new Date((since + 12) * 1000).toISOString(), type: "token_usage_record", payload: { response_id: "compact-api", usage: { input_tokens: 8, output_tokens: 2 } } },
+    { timestamp: new Date((since + 13) * 1000).toISOString(), type: "compacted", payload: { compaction_response_id: "compact-api" } },
   ];
   const request = (signal, start = since, end = until) => new NextRequest(`http://localhost/api/usage?since=${new Date(start * 1000).toISOString()}&until=${new Date(end * 1000).toISOString()}`, { method: "POST", signal });
   const { NextRequest } = await import("next/server");
@@ -46,8 +48,8 @@ test("usage API restores the last successful report without scanning and replace
     const first = await POST(request());
     assert.equal(first.status, 200);
     const saved = await first.json();
-    assert.equal(buildUsageReport(saved).summary.total_tokens, 100);
-    assert.equal(buildUsageReport(saved, { speed: "fast" }).summary.total_tokens, 100);
+    assert.equal(buildUsageReport(saved).summary.total_tokens, 110);
+    assert.equal(buildUsageReport(saved, { speed: "fast" }).summary.total_tokens, 110);
     assert.equal(readFileSync(path, "utf8"), source);
     assert.ok(!JSON.stringify(saved).includes("private conversation content"));
 
@@ -69,7 +71,7 @@ test("usage API restores the last successful report without scanning and replace
     const updated = await POST(request(undefined, since, until + 3600));
     assert.equal(updated.status, 200);
     const latest = await updated.json();
-    assert.equal(buildUsageReport(latest).summary.total_tokens, 200);
+    assert.equal(buildUsageReport(latest).summary.total_tokens, 210);
     assert.equal(latest.until, until + 3600);
     assert.deepEqual(await (await GET()).json(), latest);
     assert.equal(readCachedUsageData({ home: join(directory, "other-home") }), null);

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join, posix, resolve, sep } from "node:path";
 import { memoryHash, MemoryConflictError, MemoryRepository, resolveMemoryMarkdownPath } from "./memory.ts";
 import { AGGREGATE_MEMORY_PATHS, isAggregateMemoryPath } from "./memory-policy.ts";
-import { codexSessionsRoot, SessionRepository, type SessionSummary } from "./sessions.ts";
+import { codexSessionsRoot, SessionRepository, sessionFileKey, type SessionSummary } from "./sessions.ts";
 
 export type OrphanIncomingReference = {
   path: string;
@@ -97,9 +97,9 @@ export function referencesCandidate(line: string, sourcePath: string, candidateP
   return destinations.some((match) => resolvesToCandidate(match[1], sourcePath, candidatePath));
 }
 
-function linkedSessions(root: string, location: OrphanSessionLink["location"], ids: Set<string>, source: string) {
-  return new SessionRepository(root).catalog({ refresh: true }).sessions.flatMap((session): OrphanSessionLink[] => {
-    const linked = ids.has(session.id) || source.includes(session.path) || source.includes(session.filename);
+async function linkedSessions(root: string, location: OrphanSessionLink["location"], ids: Set<string>, source: string) {
+  return (await new SessionRepository(root).catalog({ refresh: true })).sessions.flatMap((session): OrphanSessionLink[] => {
+    const linked = ids.has(session.id) || source.includes(sessionFileKey(session.path)) || source.includes(sessionFileKey(session.filename));
     return linked ? [{
       id: session.id,
       path: session.path,
@@ -128,7 +128,7 @@ export class MemoryOrphanService {
     }
   }
 
-  inspect(path: string): OrphanPlan {
+  async inspect(path: string): Promise<OrphanPlan> {
     const repository = new MemoryRepository(this.root);
     const candidate = repository.read(path);
     if (isAggregateMemoryFile(this.root, candidate.path)) throw new Error(`${candidate.path} is an aggregate Memory file and cannot be deleted.`);
@@ -140,8 +140,8 @@ export class MemoryOrphanService {
     const provenanceSource = [candidate.content, ...incomingReferences.map(({ excerpt }) => excerpt)].join("\n");
     const ids = linkedIds(provenanceSource);
     const sessionLinks = [
-      ...linkedSessions(this.options.activeSessionsRoot, "active", ids, provenanceSource),
-      ...linkedSessions(this.options.archivedSessionsRoot, "archived", ids, provenanceSource),
+      ...await linkedSessions(this.options.activeSessionsRoot, "active", ids, provenanceSource),
+      ...await linkedSessions(this.options.archivedSessionsRoot, "archived", ids, provenanceSource),
     ];
     const entries = positiveMemories(candidate.content);
     const blockers = [
@@ -161,7 +161,7 @@ export class MemoryOrphanService {
     };
   }
 
-  apply(plan: OrphanPlan, confirmation: OrphanConfirmation): OrphanResult {
+  async apply(plan: OrphanPlan, confirmation: OrphanConfirmation): Promise<OrphanResult> {
     if (confirmation.path !== plan.path || confirmation.expectedHash !== plan.expectedHash) {
       throw new Error("Explicit confirmation of the exact orphan path and revision is required.");
     }
@@ -169,7 +169,7 @@ export class MemoryOrphanService {
     const repository = new MemoryRepository(this.root);
     const candidate = repository.read(plan.path);
     if (candidate.hash !== plan.expectedHash) throw new MemoryConflictError("The orphan file changed after inspection. Inspect it again.");
-    const fresh = this.inspect(plan.path);
+    const fresh = await this.inspect(plan.path);
     if (!fresh.eligible) throw new MemoryConflictError("The file is no longer an eligible orphan. Inspect it again.");
 
     const transactionRoot = join(this.options.backupRoot, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`);
@@ -189,7 +189,7 @@ export class MemoryOrphanService {
       throw new Error(`Could not verify backup manifest for ${fresh.path}.`);
     }
 
-    const finalInspection = this.inspect(plan.path);
+    const finalInspection = await this.inspect(plan.path);
     if (!finalInspection.eligible || finalInspection.expectedHash !== plan.expectedHash) {
       throw new MemoryConflictError("The orphan deletion plan became stale during backup. Inspect it again.");
     }
