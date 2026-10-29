@@ -27,3 +27,30 @@ test("restores, filters and regenerates a 150,000-event session without losing t
   await expect(page.getByTestId("usage-total")).toHaveText("150,000", { timeout: 30000 });
   expect(errors).toEqual([]);
 });
+
+test("quota bucket and minimum-duration controls retain ownership results", async ({ page }) => {
+  const data: UsageData = {
+    since, until: since + 1800, generatedAt: since,
+    sessions: [{ id: "quota", title: "Quota fixture", parent: "", project: "fixture", sources: [] }],
+    events: [{ ...dimensions, t: since + 1, sessionId: "quota", turn: "turn", source: "fixture", line: 1, usage }],
+    intervals: [{ ...dimensions, sessionId: "quota", turn: "turn", start: since, end: since + 1200, partial: false }],
+    snapshots: [10080, 300].flatMap(windowMinutes => Array.from({ length: windowMinutes === 300 ? 4 : 7 }, (_, i) => ({
+      ...dimensions, t: since + i * 200, sessionId: "quota", usedPercent: 10 + i, resetsAt: since + 10000, limitId: "codex", windowMinutes,
+      source: "fixture", line: i + 1, reliable: true,
+    }))), coverage,
+  };
+  await page.route("**/api/usage**", route => route.fulfill({ json: data }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Usage report", exact: true }).click();
+  const comparison = page.getByRole("region", { name: "Isolated quota comparison" });
+  await expect(page.getByText(/7 reliable readings/)).toBeVisible();
+  await expect(comparison.getByRole("cell", { name: "large · high · normal", exact: true })).toBeVisible();
+  await page.getByRole("combobox", { name: "Minimum quota window" }).selectOption("30");
+  await expect(comparison).toHaveCount(0);
+  await page.getByRole("combobox", { name: "Minimum quota window" }).selectOption("5");
+  await expect(comparison).toBeVisible();
+  await page.getByRole("combobox", { name: "Quota bucket" }).selectOption("codex/300");
+  await expect(page.getByText(/4 reliable readings/)).toBeVisible();
+  await expect(comparison).toBeVisible();
+  await expect(page.getByTestId("usage-total")).toHaveText("1");
+});
