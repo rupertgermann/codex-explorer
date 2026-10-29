@@ -46,6 +46,7 @@ async function query(sql) {
   }));
 }
 
+const { csvText } = await import("../lib/usage-report.ts");
 const { GET } = await import("../app/api/table/route.ts");
 const { NextRequest } = await import("next/server");
 const { inspectDatabase } = await import("../lib/database.ts");
@@ -56,6 +57,9 @@ test("table and query APIs preserve signed SQLite integers exactly and keep meta
     const body = await response.json();
     assert.equal(response.status, 200, body.error);
     assert.deepEqual(body.rows, expected);
+    const csv = csvText(body.rows);
+    for (const value of values) assert.ok(csv.includes(`"${value}"`), `CSV retains ${value}`);
+    assert.ok(csvText([{ value: "-1+2" }, { value: "=SUM(1)" }]).includes("\"'-1+2\""));
   }
   const table = inspectDatabase(path).tables[0];
   assert.equal(table.rowEstimate, values.length);

@@ -11,7 +11,7 @@ test("real table, row details, query and CSV retain unsafe SQLite integers", asy
   await page.getByRole("combobox", { name: "Choose table", exact: true }).selectOption("exact_integers");
   const records = page.getByRole("region", { name: "exact_integers records" });
   await expect(records.getByRole("cell", { name: "9007199254740993", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Open row 1 details", exact: true }).click();
+  await records.getByRole("row").filter({ has: page.getByRole("cell", { name: "9007199254740993", exact: true }) }).getByRole("button").click();
   await expect(page.getByRole("dialog", { name: "Row details" })).toContainText("9007199254740993");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Query lab", exact: true }).click();
@@ -22,7 +22,8 @@ test("real table, row details, query and CSV retain unsafe SQLite integers", asy
   await page.getByRole("button", { name: "CSV", exact: true }).click();
   const file = await (await download).path();
   expect(file).not.toBeNull();
-  expect(await readFile(file!, "utf8")).toContain('"9007199254740993"');
+  const csv = await readFile(file!, "utf8");
+  for (const value of ["9007199254740993", "-9007199254740993", "-9223372036854775808"]) expect(csv).toContain(`"${value}"`);
 });
 
 test("real Usage report regenerates, filters and restores equivalent fixture totals", async ({ page }) => {

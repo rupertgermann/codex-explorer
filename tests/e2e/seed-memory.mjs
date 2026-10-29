@@ -42,7 +42,8 @@ database.close();
 // Real API fixtures for exact integers and usage regeneration/restoration.
 const integerDatabase = new DatabaseSync(join(databaseRoot, "search-fixture.sqlite"));
 integerDatabase.exec("CREATE TABLE exact_integers (id INTEGER PRIMARY KEY, value INTEGER)");
-integerDatabase.prepare("INSERT INTO exact_integers VALUES (1, ?)").run(9007199254740993n);
+const exactInsert = integerDatabase.prepare("INSERT INTO exact_integers VALUES (?, ?)");
+[9007199254740993n, -9007199254740993n, -9223372036854775808n].forEach((value, index) => exactInsert.run(index + 1, value));
 integerDatabase.close();
 writeFileSync(join(sessionsRoot, "usage-fixture.jsonl"), [
   { timestamp: "2026-09-04T00:00:00Z", type: "session_meta", payload: { id: "usage-fixture", cwd: "/fixture/usage" } },

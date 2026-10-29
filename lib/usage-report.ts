@@ -217,7 +217,7 @@ export function csvText(rows: Record<string, unknown>[]) {
   const keys = Object.keys(rows[0]);
   const cell = (value: unknown) => {
     let text = value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
-    if (typeof value === "string" && /^[\s]*[=+@-]/.test(text)) text = `'${text}`;
+    if (typeof value === "string" && /^[\s]*[=+@-]/.test(text) && !/^-(?:0|[1-9]\d*)$/.test(text)) text = `'${text}`;
     return `"${text.replaceAll('"', '""')}"`;
   };
   return "\uFEFF" + [keys.map(cell).join(";"), ...rows.map(row => keys.map(key => cell(row[key])).join(";"))].join("\r\n");
