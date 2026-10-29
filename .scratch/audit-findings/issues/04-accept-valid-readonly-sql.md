@@ -26,3 +26,9 @@
 - Final: `node --test tests/query-readonly.test.mjs` passes all 5 tests against a temporary SQLite fixture. Coverage includes quoted semicolons, escaped quotes, quoted identifiers, comments, WITH, EXPLAIN QUERY PLAN, 18 rejected statement forms (including WITH UPDATE/DELETE RETURNING and EXPLAIN QUERY PLAN DELETE), and unchanged fixture data/schema.
 - Independent defense: a connection opened by `openReadonly` rejects a direct UPDATE without passing through request validation.
 - `npm run typecheck` and `npx eslint lib/database.ts tests/query-readonly.test.mjs` pass.
+
+## Review correction: SQLite line-comment endings
+
+- RED: two real POST-route cases failed before the correction. `SELECT 1 -- comment\r delete;` returned HTTP 400 for a harmless comment, while `SELECT 1 -- comment\r '\n; SELECT 2; -- '` returned HTTP 200 despite containing multiple executable statements.
+- GREEN: line comments continue through carriage returns and end only at LF, matching SQLite. The harmless query returns HTTP 200 with value 1 (SQLite retains the trailing comment in the unaliased column name); the second query returns HTTP 400 with `Run one statement at a time.`
+- `node --test tests/query-empty.test.mjs tests/query-limit.test.mjs tests/query-readonly.test.mjs` passes all 12 tests, including all 7 read-only query tests. `npm run typecheck` and `npx eslint lib/database.ts tests/query-readonly.test.mjs` pass.

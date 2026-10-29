@@ -210,7 +210,7 @@ export function jsonRows(rows: Record<string, unknown>[]) {
 export function assertReadOnlySql(input: string) {
   const sql = input.trim();
   // Keep quoted values/identifiers as whole tokens so only executable SQL is checked.
-  const tokens = (sql.match(/--[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[a-z_][a-z0-9_$]*|[^\s]/gi) ?? [])
+  const tokens = (sql.match(/--[^\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[a-z_][a-z0-9_$]*|[^\s]/gi) ?? [])
     .filter((token) => !token.startsWith("--") && !token.startsWith("/*"))
     .map((token) => token.toLowerCase());
   while (tokens.at(-1) === ";") tokens.pop();
