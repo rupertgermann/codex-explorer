@@ -1,22 +1,17 @@
-# Domain Docs
+# Domain docs
 
-How the engineering skills should consume this repo's domain documentation when exploring the codebase.
+This is a single-context repository: one root GLOSSARY.md and architecture decision records under docs/adr/.
 
-## Before exploring, read these
+## Before exploring
 
-- **`CONTEXT.md`** at the repo root.
-- Relevant ADRs under **`docs/adr/`**.
+Read GLOSSARY.md and the ADRs relevant to the work under docs/adr/.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill (reached via `/grill-with-docs` and `/improve-codebase-architecture`) creates them lazily when terms or decisions actually get resolved.
+If these files do not exist, proceed silently. Domain-modeling work can create them when actual terminology or decisions need recording.
 
-## Use the glossary's vocabulary
+## Vocabulary
 
-When your output names a domain concept (in an issue title, a refactor proposal, a hypothesis, a test name), use the term as defined in `CONTEXT.md`. Don't drift to synonyms the glossary explicitly avoids.
+Use the names defined in GLOSSARY.md in ticket titles, descriptions, code discussions, and architecture proposals. For a missing concept, reuse established repository terminology or flag the concrete glossary gap during domain modeling.
 
-If the concept you need isn't in the glossary yet, that's a signal — either you're inventing language the project doesn't use (reconsider) or there's a real gap (note it for `/domain-modeling`).
+## Architecture decisions
 
-## Flag ADR conflicts
-
-If your output contradicts an existing ADR, surface it explicitly rather than silently overriding:
-
-> _Contradicts ADR-0007 (event-sourced orders) — but worth reopening because…_
+If a proposal conflicts with an existing ADR, identify that ADR and explain the conflict before proposing a change to the decision.

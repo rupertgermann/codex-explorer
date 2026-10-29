@@ -1,45 +1,41 @@
 # Issue tracker: GitHub
 
-Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all operations.
+Specs, implementation tickets, blocking dependencies, and tracked status live in GitHub Issues for rupertgermann/codex-explorer. Use the gh CLI. Scratch can hold working notes; existing local plans and tickets stay in place unless migration is requested.
 
-## Conventions
+## Destination and access
 
-- **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
-- **Read an issue**: `gh issue view <number> --comments`, filtering comments by `jq` and also fetching labels.
-- **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
-- **Comment on an issue**: `gh issue comment <number> --body "..."`
-- **Apply / remove labels**: `gh issue edit <number> --add-label "..."` / `--remove-label "..."`
-- **Close**: `gh issue close <number> --comment "..."`
+Before the first issue write in a session, verify the target with gh repo view --json nameWithOwner. Use rupertgermann/codex-explorer explicitly if gh resolves another repository.
 
-Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
+Teamwork URLs are read-only source references. Read relevant tickets and comments; record resulting specs and tickets in this repository's GitHub Issues. Teamwork records, including comments, labels, assignments, and time entries, remain read-only through every tool and access path.
 
-## Pull requests as a triage surface
+## Issue operations
 
-**PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
+- Create one issue per spec or implementation ticket. Use gh issue create --repo rupertgermann/codex-explorer --title TITLE --body-file FILE for multiline bodies.
+- Read the full body, labels, and comments with gh issue view NUMBER --repo rupertgermann/codex-explorer --json number,title,body,labels,comments.
+- List issues with gh issue list --repo rupertgermann/codex-explorer --state open --json number,title,body,labels,assignees.
+- Comment with gh issue comment NUMBER --repo rupertgermann/codex-explorer --body-file FILE.
+- Apply or remove configured labels with gh issue edit NUMBER --add-label LABEL or --remove-label LABEL.
+- Post the resolution explanation before closing an issue. Use gh issue close NUMBER after the comment; gh issue close --comment can silently omit the comment when the issue is already closed.
 
-When set to `yes`, PRs run through the same labels and states as issues, using the `gh pr` equivalents:
+## Parent tickets and blockers
 
-- **Read a PR**: `gh pr view <number> --comments` and `gh pr diff <number>` for the diff.
-- **List external PRs for triage**: `gh pr list --state open --json number,title,body,labels,author,authorAssociation,comments` then keep only `authorAssociation` of `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`, or `NONE` (drop `OWNER`/`MEMBER`/`COLLABORATOR`).
-- **Comment / label / close**: `gh pr comment`, `gh pr edit --add-label`/`--remove-label`, `gh pr close`.
+Use GitHub native sub-issues for parent-child relationships and native issue dependencies for blockers. Use numeric database IDs returned by gh api repos/rupertgermann/codex-explorer/issues/NUMBER --jq .id, rather than issue numbers or GraphQL node IDs, for REST relationship operations.
 
-GitHub shares one number space across issues and PRs, so a bare `#42` may be either — resolve with `gh pr view 42` and fall back to `gh issue view 42`.
+- Attach a child: gh api --method POST repos/rupertgermann/codex-explorer/issues/PARENT/sub_issues -F sub_issue_id=CHILD_DATABASE_ID.
+- Add a blocker: gh api --method POST repos/rupertgermann/codex-explorer/issues/CHILD/dependencies/blocked_by -F issue_id=BLOCKER_DATABASE_ID.
+- Count open blockers: gh api repos/rupertgermann/codex-explorer/issues/NUMBER --jq .issue_dependencies_summary.blocked_by.
 
-## When a skill says "publish to the issue tracker"
+Where native relationships are unavailable, record Part of #PARENT and Blocked by: #BLOCKER references in ticket bodies. Only open blockers gate a ticket.
 
-Create a GitHub issue.
+## Pull requests as a request surface
 
-## When a skill says "fetch the relevant ticket"
+PRs as a request surface: no.
 
-Run `gh issue view <number> --comments`.
+## Skill operations
 
-## Wayfinding operations
-
-Used by `/wayfinder`. The **map** is a single issue with **child** issues as tickets.
-
-- **Map**: a single issue labelled `wayfinder:map`, holding the Notes / Decisions-so-far / Fog body. `gh issue create --label wayfinder:map`.
-- **Child ticket**: an issue linked to the map as a GitHub sub-issue (`gh api` on the sub-issues endpoint). Where sub-issues aren't enabled, add the child to a task list in the map body and put `Part of #<map>` at the top of the child body. Labels: `wayfinder:<type>` (`research`/`prototype`/`grilling`/`task`). Once claimed, the ticket is assigned to the driving dev.
-- **Blocking**: GitHub's **native issue dependencies** — the canonical, UI-visible representation. Add an edge with `gh api --method POST repos/<owner>/<repo>/issues/<child>/dependencies/blocked_by -F issue_id=<blocker-db-id>`, where `<blocker-db-id>` is the blocker's numeric **database id** (`gh api repos/<owner>/<repo>/issues/<n> --jq .id`, _not_ the `#number` or `node_id`). GitHub reports `issue_dependencies_summary.blocked_by` (open blockers only — the live gate). Where dependencies aren't available, fall back to a `Blocked by: #<n>, #<n>` line at the top of the child body. A ticket is unblocked when every blocker is closed.
-- **Frontier query**: list the map's open children (`gh issue list --state open`, scoped to the map's sub-issues / task list), drop any with an open blocker (`issue_dependencies_summary.blocked_by > 0`, or an open issue in the `Blocked by` line) or an assignee; first in map order wins.
-- **Claim**: `gh issue edit <n> --add-assignee @me` — the session's first write.
-- **Resolve**: `gh issue comment <n> --body "<answer>"`, then `gh issue close <n>`, then append a context pointer (gist + link) to the map's Decisions-so-far.
+- Publish to the issue tracker: create or update the appropriate GitHub issue.
+- Fetch the relevant ticket: read its full body and relevant comments.
+- Wayfinding map: one parent issue with child issues for tickets. Keep Notes, Decisions-so-far, and Fog in the parent body.
+- Frontier: select an open, unassigned child whose blockers are all closed, following parent ticket order.
+- Claim: assign the ticket to the current user before implementation, using gh issue edit NUMBER --add-assignee @me.
+- Resolve: post the answer or implementation result, close the ticket, and update the parent's context pointer. Keep the parent's remaining work and recorded decisions intact.

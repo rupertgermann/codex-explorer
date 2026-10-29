@@ -10,14 +10,4 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Agent skills
 
-### Issue tracker
-
-Issues are tracked in this repository’s GitHub Issues via the `gh` CLI. See `docs/agents/issue-tracker.md`.
-
-### Triage labels
-
-Triage uses the five default canonical labels. See `docs/agents/triage-labels.md`.
-
-### Domain docs
-
-Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
+For issue planning, triage, and domain exploration, read the Agent skills section in CLAUDE.md.
