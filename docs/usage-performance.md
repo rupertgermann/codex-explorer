@@ -25,7 +25,7 @@ The semantic-heavy fixture has four files with 60,000 contexts each. Its 69,607,
 
 Every warm semantic sweep reopens approximately half the original source bytes: about 15.1 MB versus 30.2 MB. Established residents survive, while new admissions still enter the cache. A separate profile identifies JSONL parsing, normalization and context accounting as the remaining work on uncached sources. The compacted transcript fixture has too little warm CPU work for a useful sampled hotspot.
 
-The committed over-budget test generates semantic records, checks its actual normalized size exceeds the budget, verifies partial reuse for five sweeps, checks changed-file invalidation and deletion, and confirms full reuse once the remaining set fits. Other tests cover date/root changes, inherited activity, malformed timestamps, original semantic line numbers and cancellation.
+The committed over-budget test generates semantic records, checks its actual normalized size exceeds the budget, verifies partial reuse for five sweeps, checks changed-file invalidation and deletion, and confirms full reuse once the remaining set fits. A separate five-sweep control covers two individually cacheable sources when only one fits: admission bypass preserves the final resident, and source-set pruning permits a changed working set. Other tests cover date/root changes, inherited activity, malformed timestamps, original semantic line numbers and cancellation.
 
 ## Quota calculation
 

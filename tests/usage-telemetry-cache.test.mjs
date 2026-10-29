@@ -111,16 +111,35 @@ test("scan-resistant admission preserves reused residents, promotes a reused can
   cache.set("/root/d", "one", "d", 6);
   assert.equal(cache.get("/root/c", "one"), undefined);
   assert.equal(cache.get("/root/d", "one"), "d"); // A real hit promotes the candidate.
-  cache.set("/root/e", "one", "e", 7); // Both older residents must leave to fit.
+  cache.set("/root/e", "one", "e", 7); // Bypass an admission that would evict every resident.
   assert.equal(cache.get("/root/a", "one"), undefined);
-  assert.equal(cache.get("/root/d", "one"), undefined);
+  assert.equal(cache.get("/root/d", "one"), "d");
   cache.set("/root/huge", "one", "huge", 11);
-  assert.equal(cache.get("/root/e", "one"), "e");
+  assert.equal(cache.get("/root/e", "one"), undefined);
+  assert.equal(cache.get("/root/d", "one"), "d");
   cache.set("/root/f", "one", "f", 3);
   cache.prune("/root", new Set(["/root/e"]));
   cache.set("/root/g", "one", "g", 3);
   assert.equal(cache.get("/root/g", "changed"), undefined);
-  assert.equal(cache.get("/root/e", "one"), "e");
+  assert.equal(cache.get("/root/e", "one"), undefined);
+});
+
+test("scan resistance retains partial hits when only one large source fits", () => {
+  const cache = new SessionFileCache(64, "scan-resistant");
+  const sweep = () => {
+    const hits = [];
+    for (const path of ["/root/a", "/root/b"]) {
+      if (cache.get(path, "one")) hits.push(path);
+      else cache.set(path, "one", path, 40);
+    }
+    return hits;
+  };
+  assert.deepEqual(sweep(), []);
+  for (let generation = 0; generation < 5; generation++) assert.deepEqual(sweep(), ["/root/a"]);
+  cache.retain(new Set(["/root/b"]));
+  cache.set("/root/b", "one", "/root/b", 40);
+  assert.equal(cache.get("/root/b", "one"), "/root/b");
+  assert.equal(cache.get("/root/a", "one"), undefined);
 });
 
 test("timestamp evidence compacts finite runs but keeps invalid times and semantic line boundaries", async () => {

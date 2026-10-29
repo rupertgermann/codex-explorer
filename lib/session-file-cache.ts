@@ -28,8 +28,12 @@ export class SessionFileCache<T> {
   set(path: string, revision: string, value: T, bytes: number) {
     this.delete(path);
     if (bytes > this.budget) return;
-    if (this.bytes + bytes > this.budget && this.probationaryPath !== undefined) this.delete(this.probationaryPath);
-    while (this.bytes + bytes > this.budget && this.entries.size) this.delete(this.entries.keys().next().value!);
+    if (this.bytes + bytes > this.budget && this.probationaryPath !== undefined && this.entries.size > 1) this.delete(this.probationaryPath);
+    while (this.bytes + bytes > this.budget && this.entries.size) {
+      // Bypass admission rather than cycle through misses when only one source fits.
+      if (this.policy === "scan-resistant" && this.entries.size === 1) return;
+      this.delete(this.entries.keys().next().value!);
+    }
     this.entries.set(path, { revision, value, bytes });
     this.bytes += bytes;
     if (this.policy === "scan-resistant") this.probationaryPath = path;
