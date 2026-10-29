@@ -14,8 +14,18 @@ export async function POST(request: Request) {
     try {
       const statement = db.prepare(sql);
       statement.setAllowBareNamedParameters(true);
-      const rows = jsonRows(statement.all().slice(0, 500) as Record<string, unknown>[]);
-      return NextResponse.json({ rows, columns: rows[0] ? Object.keys(rows[0]) : [], durationMs: performance.now() - startedAt, limited: rows.length === 500 });
+      const columns = [...new Set(statement.columns().map((column) => column.name))];
+      const collected: Record<string, unknown>[] = [];
+      let limited = false;
+      for (const row of statement.iterate()) {
+        if (collected.length === 500) {
+          limited = true;
+          break;
+        }
+        collected.push(row);
+      }
+      const rows = jsonRows(collected);
+      return NextResponse.json({ rows, columns, durationMs: performance.now() - startedAt, limited });
     } finally {
       db.close();
     }

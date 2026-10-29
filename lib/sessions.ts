@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createReadStream, existsSync, lstatSync, openSync, closeSync, readSync, readdirSync, statSync } from "node:fs";
+import { createReadStream, existsSync, lstatSync, openSync, closeSync, readSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
@@ -198,7 +198,8 @@ async function summary(root: string, path: string): Promise<SessionSummary> {
   const record = await firstRecord(absolutePath);
   const payload = record?.type === "session_meta" ? object(record.payload) : {};
   const cwd = string(payload.cwd);
-  const parentThreadId = string(payload.parent_thread_id);
+  const spawn = object(object(object(payload.source).subagent).thread_spawn);
+  const parentThreadId = string(payload.parent_thread_id) || string(spawn.parent_thread_id);
   return {
     id: string(payload.id) || basename(sessionFileKey(path), ".jsonl"),
     path,
@@ -722,6 +723,9 @@ export class SessionRepository {
     const absolutePath = resolve(this.root, path);
     if (!absolutePath.startsWith(`${this.root}${sep}`) || !isSessionFile(absolutePath)) throw new SessionPathError();
     if (!existsSync(absolutePath) || !lstatSync(absolutePath).isFile()) throw new SessionPathError("The requested session file does not exist.");
+    const realRoot = realpathSync(this.root);
+    const realPath = realpathSync(absolutePath);
+    if (!realPath.startsWith(`${realRoot}${sep}`)) throw new SessionPathError();
     return absolutePath;
   }
 }
