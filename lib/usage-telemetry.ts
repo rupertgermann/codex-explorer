@@ -50,13 +50,15 @@ function telemetry(record: JsonRecord): JsonRecord {
       }
     }
   }
-  return base;
+  // Ordinary records only extend activity; parse once before cold accounting and warm replay.
+  const timestamp = typeof base.timestamp === "number" ? base.timestamp : typeof base.timestamp === "string" ? Date.parse(base.timestamp) / 1000 : NaN;
+  return Number.isFinite(timestamp) ? { timestamp } : base;
 }
 
 type Evidence = { records: { record: JsonRecord; line: number }[]; skippedLines: number };
 // No raw content or date-clipped results. Oversized files stream without being retained.
-const evidenceCache = new SessionFileCache<Evidence>(64 * 1024 * 1024);
-export const pruneUsageTelemetry = (root: string, paths: Set<string>) => evidenceCache.prune(root, paths);
+const evidenceCache = new SessionFileCache<Evidence>(64 * 1024 * 1024, "scan-resistant");
+export const pruneUsageTelemetry = (paths: Set<string>) => evidenceCache.retain(paths);
 
 export async function scanUsageTelemetry(path: string, visit: (record: JsonRecord, line: number) => void, signal?: AbortSignal) {
   signal?.throwIfAborted();
@@ -71,14 +73,25 @@ export async function scanUsageTelemetry(path: string, visit: (record: JsonRecor
     signal?.throwIfAborted();
     return { skippedLines: cached.skippedLines };
   }
-  let records: Evidence["records"] = [], bytes = 0, retain = true;
+  let records: Evidence["records"] = [], bytes = 0, lastRecordBytes = 0, retain = true;
   const scan = await scanJsonl(path, Infinity, (raw, line) => {
     const record = telemetry(raw);
     visit(record, line);
     if (!retain) return;
-    bytes += Buffer.byteLength(JSON.stringify(record)) + 128;
+    const last = records.at(-1);
+    if (last && record.type === undefined && typeof record.timestamp === "number" && Number.isFinite(record.timestamp)
+      && last.record.type === undefined && typeof last.record.timestamp === "number" && Number.isFinite(last.record.timestamp)) {
+      if (record.timestamp > last.record.timestamp) {
+        const size = Buffer.byteLength(JSON.stringify(record)) + 128;
+        bytes += size - lastRecordBytes;
+        last.record = record; last.line = line; lastRecordBytes = size;
+      }
+    } else {
+      lastRecordBytes = Buffer.byteLength(JSON.stringify(record)) + 128;
+      bytes += lastRecordBytes;
+      records.push({ record, line });
+    }
     if (bytes > evidenceCache.budget) { retain = false; records = []; }
-    else records.push({ record, line });
   }, { signal, maxRecordBytes: 32 * 1024 * 1024 });
   signal?.throwIfAborted();
   if (retain && sessionFileRevision(path) === revision) evidenceCache.set(path, revision, { records, skippedLines: scan.skippedLines }, bytes + 128);

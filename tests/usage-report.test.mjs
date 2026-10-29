@@ -396,3 +396,41 @@ test("daily activity preserves local midnight across spring and autumn DST", () 
     }
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
+
+test("large event-only, interval-heavy and mixed sessions keep exact bounds without argument spreading", () => {
+  const dims = { model: "large", effort: "high", speed: "normal", sessionId: "large", turn: "turn" };
+  const event = index => ({ ...dims, t: epoch + index, usage: { ...emptyTokens(), input_tokens: 1, total_tokens: 1 }, source: "fixture", line: index + 1 });
+  const interval = (index, count) => ({ ...dims, effort: index % 2 ? "medium" : "high", start: epoch + index * 2 - count, end: epoch + index * 2 - count + 1, partial: false });
+  for (const [eventCount, intervalCount] of [[150000, 0], [1, 150000], [80000, 80000]]) {
+    const data = { since: epoch - 200000, until: epoch + 200000, generatedAt: epoch, sessions: [{ id: "large", title: "large", parent: "", project: "fixture", sources: [] }],
+      events: Array.from({ length: eventCount }, (_, i) => event(i)), intervals: Array.from({ length: intervalCount }, (_, i) => interval(i, intervalCount)), snapshots: [], coverage: {} };
+    const report = buildUsageReport(data);
+    assert.equal(report.summary.total_tokens, eventCount);
+    assert.equal(report.sessions[0].models[0].requests, eventCount);
+    assert.equal(report.sessions[0].start, epoch - intervalCount);
+    assert.equal(report.sessions[0].end, epoch + Math.max(eventCount - 1, intervalCount - 1));
+    assert.deepEqual(buildUsageReport(data, { model: "no-match" }).sessions, []);
+    assert.equal(buildUsageReport(data, { model: "large", effort: "high", speed: "normal", sessionId: "large" }).summary.total_tokens, eventCount);
+  }
+});
+
+test("quota ownership compares each identity field and preserves exclusion precedence", () => {
+  const dims = { model: "model", effort: "high", speed: "normal" };
+  const interval = { ...dims, sessionId: "one", start: 0, end: 1200, partial: false };
+  const snapshots = Array.from({ length: 7 }, (_, i) => ({ ...dims, sessionId: "one", t: i * 200, usedPercent: i, resetsAt: 10000, limitId: "codex", windowMinutes: 10080, source: "fixture", line: i + 1, reliable: true }));
+  const analyze = (intervals, points = snapshots) => analyzeQuota({ intervals, snapshots: points }, "codex/10080");
+  const equal = analyze([{ ...interval }, { ...interval }]);
+  assert.equal(equal.windows.length, 1);
+  assert.equal(equal.windows[0].category, "isolated");
+  assert.equal(equal.selected[0].observedPp, 6);
+  for (const [field, value] of [["sessionId", "two"], ["model", "other"], ["effort", "medium"], ["speed", "fast"]]) {
+    assert.equal(analyze([interval, { ...interval, [field]: value }]).windows[0].category, "parallel_or_switch");
+    assert.equal(analyze([interval], snapshots.map((s, i) => i ? { ...s, [field]: value } : s)).windows[0].category, "snapshot_owner_changed");
+  }
+  assert.equal(analyze([interval, { ...interval, sessionId: "two", partial: true }]).windows[0].category, "uncertain_activity");
+  assert.equal(analyze([{ ...interval, end: 50 }, { ...interval, start: 100 }]).windows[0].category, "activity_gap");
+  assert.equal(analyze([{ ...interval, partial: true }], snapshots.map((s, i) => ({ ...s, usedPercent: i ? 9 : 10 }))).windows[0].category, "stale_counter");
+  assert.equal(analyze([{ ...interval, partial: true }], snapshots.map(s => ({ ...s, usedPercent: 100 }))).windows[0].category, "quota_at_100");
+  const unknown = { model: "unknown", effort: "unknown", speed: "unknown" };
+  assert.equal(analyze([{ ...interval, ...unknown }, { ...interval, ...unknown }], snapshots.map(s => ({ ...s, ...unknown }))).windows[0].category, "isolated");
+});

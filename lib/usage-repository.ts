@@ -87,14 +87,18 @@ export async function readUsageData(since: number, until: number, options: Usage
   const initialSnapshots: { event: UsageEvent; total: Tokens; last: Tokens }[] = [];
   const counterSnapshots: { sessionId: string; source: string; t: number; total: Tokens }[] = [];
   const catalogs = await Promise.all(roots.map(async root => ({ root, sessions: (await new SessionRepository(root).catalog({ refresh: true, signal: options.signal })).sessions })));
-  for (const { root, sessions } of catalogs) pruneUsageTelemetry(root, new Set(sessions.map(file => join(root, file.path))));
+  const selectedCatalogs = catalogs.map(({ root, sessions }) => ({ root, sessions: sessions.filter(file => {
+    const key = sessionFileKey(file.path);
+    if (seenFiles.has(key)) return false;
+    seenFiles.add(key);
+    return true;
+  }) }));
+  // Unused future/shadowed/other-root residents must not pin the evidence budget.
+  pruneUsageTelemetry(new Set(selectedCatalogs.flatMap(({ root, sessions }) => sessions.filter(file => file.startedAt / 1000 < until).map(file => join(root, file.path)))));
   const sourcesBySession = Map.groupBy(catalogs.flatMap(catalog => catalog.sessions), session => session.id);
   const repeatedSessions = new Set([...sourcesBySession].filter(([, files]) => files.length > 1).map(([id]) => id));
-  for (const { root, sessions } of catalogs) {
+  for (const { root, sessions } of selectedCatalogs) {
     for (const file of sessions) {
-      const key = sessionFileKey(file.path);
-      if (seenFiles.has(key)) continue;
-      seenFiles.add(key);
       options.signal?.throwIfAborted();
       data.coverage.files++;
       if (file.startedAt / 1000 >= until) continue;

@@ -95,8 +95,9 @@ export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
     const own = eventsBySession.get(session.id) ?? [];
     if (!own.length) return [];
     const parts = intervalsBySession.get(session.id) ?? [];
-    const start = Math.min(...own.map(e => e.t), ...parts.map(i => i.start));
-    const end = Math.max(...own.map(e => e.t), ...parts.map(i => i.end));
+    let start = Infinity, end = -Infinity;
+    for (const event of own) { start = Math.min(start, event.t); end = Math.max(end, event.t); }
+    for (const interval of parts) { start = Math.min(start, interval.start); end = Math.max(end, interval.end); }
     const activeSeconds = parts.reduce((n, i) => n + i.end - i.start, 0);
     return [{ ...session, ...sumTokens(own), start, end, activeSeconds,
       partial: parts.some(i => i.partial) || !activeSeconds, models: modelRows(own, parts) }];
@@ -111,12 +112,14 @@ export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
   daily: usageBuckets(events, intervals, data.sessions, data.since, data.until, 24) };
 }
 
+const sameDimensions = (a: Dimensions, b: Dimensions) => a.model === b.model && a.effort === b.effort && a.speed === b.speed;
+
 // Attribute quota only with continuous, exclusive local activity, including all models.
 function quotaOwner(start: number, end: number, intervals: ActivityInterval[]) {
   const parts = intervals.filter(i => i.start < end && i.end > start);
   if (parts.some(i => i.partial)) return { category: "uncertain_activity" };
   if (!parts.length) return { category: "no_local_activity" };
-  if (new Set(parts.map(i => JSON.stringify([i.sessionId, dimensionKey(i)]))).size > 1) return { category: "parallel_or_switch" };
+  if (parts.some(i => i.sessionId !== parts[0].sessionId || !sameDimensions(i, parts[0]))) return { category: "parallel_or_switch" };
   if (Math.abs(unionSeconds(parts.map(i => ({ start: Math.max(start, i.start), end: Math.min(end, i.end) }))) - (end - start)) > .001) return { category: "activity_gap" };
   return { category: "isolated", owner: parts[0] };
 }
@@ -156,7 +159,7 @@ export function analyzeQuota(data: UsageData, bucket: string, minimumMinutes = 1
         else if (previous.usedPercent >= 100 || row.usedPercent >= 100) category = "quota_at_100";
         else if (row.t - previous.t > 300) category = "snapshot_gap_over_5min";
         else if (row.t === previous.t) category = "same_timestamp";
-        else if (owner && (previous.sessionId !== owner.sessionId || row.sessionId !== owner.sessionId || dimensionKey(previous) !== dimensionKey(owner) || dimensionKey(row) !== dimensionKey(owner))) category = "snapshot_owner_changed";
+        else if (owner && (previous.sessionId !== owner.sessionId || row.sessionId !== owner.sessionId || !sameDimensions(previous, owner) || !sameDimensions(row, owner))) category = "snapshot_owner_changed";
         const isolated = category === "isolated" && owner;
         const pair: QuotaWindow = { cycle: cycle.id, start: previous.t, end: row.t,
           category, sessionId: isolated ? owner.sessionId : null,
