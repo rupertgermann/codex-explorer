@@ -208,13 +208,21 @@ export function jsonRows(rows: Record<string, unknown>[]) {
 }
 
 export function assertReadOnlySql(input: string) {
-  const sql = input.trim().replace(/;+\s*$/, "");
-  if (!sql) throw new Error("Enter a SQL query first.");
-  if (sql.includes(";")) throw new Error("Run one statement at a time.");
-  if (!/^(select|with|explain\s+query\s+plan)\b/i.test(sql)) {
+  const sql = input.trim();
+  // Keep quoted values/identifiers as whole tokens so only executable SQL is checked.
+  const tokens = (sql.match(/--[^\r\n]*|\/\*[\s\S]*?(?:\*\/|$)|'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|[a-z_][a-z0-9_$]*|[^\s]/gi) ?? [])
+    .filter((token) => !token.startsWith("--") && !token.startsWith("/*"))
+    .map((token) => token.toLowerCase());
+  while (tokens.at(-1) === ";") tokens.pop();
+  if (!tokens.length) throw new Error("Enter a SQL query first.");
+  if (tokens.includes(";")) throw new Error("Run one statement at a time.");
+  if (tokens[0] !== "select" && tokens[0] !== "with" && tokens.slice(0, 3).join(" ") !== "explain query plan") {
     throw new Error("Only SELECT, WITH, and EXPLAIN QUERY PLAN statements are allowed.");
   }
-  if (/\b(insert|update|delete|replace|drop|alter|create|attach|detach|vacuum|reindex)\b/i.test(sql)) {
+  if (tokens.some((token, index) =>
+    /^(insert|update|delete|drop|alter|create|attach|detach|vacuum|reindex)$/.test(token) ||
+    (token === "replace" && tokens[index + 1] !== "("),
+  )) {
     throw new Error("This query contains a write or schema-changing keyword.");
   }
   return sql;
