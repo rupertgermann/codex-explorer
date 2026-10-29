@@ -44,6 +44,18 @@ test("Query lab runs read-only replacement functions", async () => {
   assert.deepEqual(result.body.rows, [{ value: "changed" }]);
 });
 
+test("Query lab keeps carriage returns inside SQLite line comments", async () => {
+  const result = await query("SELECT 1 -- comment\r delete;");
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+  assert.deepEqual(result.body.rows, [{ "1 -- comment\r delete;": 1 }]);
+});
+
+test("Query lab rejects statements after a line comment ending at a newline", async () => {
+  const result = await query("SELECT 1 -- comment\r '\n; SELECT 2; -- '");
+  assert.equal(result.status, 400, JSON.stringify(result.body));
+  assert.equal(result.body.error, "Run one statement at a time.");
+});
+
 test("Query lab accepts quoted punctuation, escaped quotes, comments, identifiers and supported query forms", async () => {
   const cases = [
     ["SELECT '; update' AS value", [{ value: "; update" }]],
