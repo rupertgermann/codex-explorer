@@ -90,7 +90,7 @@ npm install
 npm run dev -- --hostname 127.0.0.1
 ```
 
-Then open [http://localhost:3000](http://localhost:3000).
+Then open [http://localhost:3333](http://localhost:3333).
 
 ## Configuration
 
