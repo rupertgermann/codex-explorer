@@ -1,7 +1,9 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
 import { MemoryForgetService } from "../lib/memory-forget.ts";
 import { MemoryRepository } from "../lib/memory.ts";
@@ -325,4 +327,84 @@ test("manual recheck detects a normalized-term paraphrase", async () => {
   assert.equal(recheck.status, "resurfaced");
   assert.equal(recheck.resurfaced[0].match, "related");
   assert.equal(recheck.resurfaced[0].path, "rollout_summaries/later.md");
+});
+
+for (const target of ["backup", "manifest"]) test(`apply preserves the corpus when persisted ${target} bytes are corrupt`, async () => {
+  const { base, root } = fixture();
+  const backupRoot = join(base, "backups");
+  const service = new MemoryForgetService(root, backupRoot);
+  const plan = service.preview(selection(root));
+  const before = bytes(root);
+  const original = fs.writeFileSync;
+  let corrupted = false;
+  fs.writeFileSync = (path, content, ...options) => {
+    const destination = String(path);
+    const matches = destination.startsWith(backupRoot) && (target === "manifest" ? destination.endsWith("manifest.json") : destination.includes("/files/"));
+    if (matches) corrupted = true;
+    return original(path, matches ? "Corrupt persisted bytes" : content, ...options);
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(service.apply(plan));
+    assert.equal(corrupted, true);
+    assert.deepEqual(bytes(root), before);
+  } finally { fs.writeFileSync = original; syncBuiltinESMExports(); }
+});
+
+test("regular Forget rejects a backup ancestor linked inside Memory before changing sources", async () => {
+  const { base, root } = fixture();
+  const linked = join(base, "external-looking");
+  symlinkSync(root, linked, "dir");
+  const service = new MemoryForgetService(root, join(linked, "new-backups"));
+  const plan = service.preview(selection(root));
+  const before = bytes(root);
+  await assert.rejects(service.apply(plan));
+  assert.deepEqual(bytes(root), before);
+});
+
+test("regular Forget stores private source bytes and its manifest under umask 022", async () => {
+  const { base, root } = fixture();
+  const backupRoot = join(base, "memories-backups");
+  const service = new MemoryForgetService(root, backupRoot);
+  const plan = service.preview(selection(root));
+  const originals = new Map(plan.sections.map(section => [section.path, readFileSync(join(root, section.path))]));
+  for (const path of originals.keys()) fs.chmodSync(join(root, path), 0o600);
+  const previous = process.umask(0o022);
+  let result;
+  try { result = await service.apply(plan); }
+  finally { process.umask(previous); }
+  assert.equal(fs.statSync(result.manifestPath).mode & 0o777, 0o600);
+  for (const [path, content] of originals) {
+    const backup = join(result.manifestPath, "..", "files", path);
+    assert.deepEqual(readFileSync(backup), content);
+    assert.equal(fs.statSync(backup).mode & 0o777, 0o600);
+    for (let directory = dirname(backup); directory.startsWith(backupRoot); directory = dirname(directory)) assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+  }
+});
+
+test("rollback preserves a concurrent edit after an intermediate apply failure", async () => {
+  const { base, root } = fixture();
+  const backupRoot = join(base, "backups"), summary = join(root, "memory_summary.md");
+  const service = new MemoryForgetService(root, backupRoot);
+  const plan = service.preview(selection(root)), before = bytes(root);
+  const original = fs.renameSync;
+  let edited = false;
+  fs.renameSync = (from, to) => {
+    if (String(to) === join(root, "MEMORY.md")) throw new Error("Intermediate replacement failed");
+    original(from, to);
+    if (String(to) === summary && !edited) {
+      edited = true;
+      writeFileSync(summary, "Concurrent edit must survive\n");
+    }
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(service.apply(plan));
+    assert.equal(edited, true);
+    assert.equal(readFileSync(summary, "utf8"), "Concurrent edit must survive\n");
+    assert.deepEqual(bytes(root).filter(([path]) => path !== "memory_summary.md"), before.filter(([path]) => path !== "memory_summary.md"));
+    const manifest = JSON.parse(readFileSync(join(backupRoot, readdirSync(backupRoot)[0], "manifest.json"), "utf8"));
+    assert.equal(manifest.status, "rollback-conflict");
+    assert.deepEqual(manifest.rollbackFailures, ["memory_summary.md"]);
+  } finally { fs.renameSync = original; syncBuiltinESMExports(); }
 });

@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, sy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { atomicMemoryWrite, memoryHash, MemoryRepository } from "../lib/memory.ts";
+import { atomicMemoryWrite, memoryHash, MemoryRepository, resolveMemoryMarkdownPath } from "../lib/memory.ts";
 
 const roots = [];
 
@@ -170,4 +170,13 @@ test("Memory reads and saves reject a directory link escaping the corpus", () =>
     { name: "MemoryPathError" },
   );
   assert.equal(readFileSync(path, "utf8"), "Outside content\n");
+});
+
+test("new Memory paths reject linked ancestors outside the corpus before creating anything", () => {
+  const parent = memoryRoot(), root = join(parent, "memories"), outside = join(parent, "outside");
+  mkdirSync(root); mkdirSync(outside);
+  symlinkSync(outside, join(root, "linked"), "dir");
+  assert.throws(() => resolveMemoryMarkdownPath(root, "linked/new/subdirectory/note.md", false), { name: "MemoryPathError" });
+  assert.deepEqual(readdirSync(outside), []);
+  assert.equal(resolveMemoryMarkdownPath(root, "new/note.md", false), join(root, "new/note.md"));
 });

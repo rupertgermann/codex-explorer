@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { zstdCompressSync } from "node:zlib";
@@ -284,4 +286,97 @@ test("Project Forget API resolves compressed active and archived provenance with
   assert.deepEqual(actual.database.rows, expected.database.rows);
   assert.equal(actual.actionable, true, actual.reason);
   assert.deepEqual(projectBytes(source.home), before);
+});
+
+for (const target of ["neighbor row", "scheduler job"]) test(`Project Apply rejects silent trigger changes to a ${target} and restores both stores`, async () => {
+  const source = fixture();
+  const db = new DatabaseSync(join(source.home, "memories_1.sqlite"));
+  const change = target === "neighbor row" ? "UPDATE stage1_outputs SET raw_memory='unexpected side effect' WHERE thread_id='neighbor'" : "UPDATE jobs SET status='unexpected side effect'";
+  db.exec(`CREATE TRIGGER silent_side_effect AFTER DELETE ON stage1_outputs WHEN OLD.thread_id='app' BEGIN ${change}; END`);
+  const rows = db.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all();
+  const jobs = db.prepare("SELECT * FROM jobs").all();
+  db.close();
+  const plan = await preview(source);
+  assert.equal(plan.actionable, true, plan.reason);
+  const before = projectBytes(source.root).map(([path, content]) => [path, content]);
+  const response = await forgetRequest(source, { action: "apply", plan, confirmedDirectory: plan.directory });
+  assert.equal(response.status, 400);
+  assert.deepEqual(projectBytes(source.root).map(([path, content]) => [path, content]), before);
+  const restored = new DatabaseSync(plan.database.path, { readOnly: true });
+  try {
+    assert.deepEqual(restored.prepare("SELECT * FROM stage1_outputs ORDER BY thread_id").all(), rows);
+    assert.deepEqual(restored.prepare("SELECT * FROM jobs").all(), jobs);
+  } finally { restored.close(); }
+  const backups = join(source.home, "memory-forget-backups");
+  const manifest = JSON.parse(readFileSync(join(backups, readdirSync(backups)[0], "manifest.json"), "utf8"));
+  assert.equal(manifest.status, "rolled-back");
+  assert.deepEqual(manifest.rollbackFailures, []);
+});
+
+test("Project Forget retains rollout, raw-thread and ad-hoc sources referenced by both projects", async () => {
+  const source = fixture();
+  const sharedPaths = ["rollout_summaries/shared.md", "extensions/ad_hoc/notes/shared.md"];
+  const references = "- rollout_summaries/shared.md (thread_id=shared)\n- extensions/ad_hoc/notes/shared.md\n";
+  const durablePath = join(source.root, "MEMORY.md");
+  let durable = readFileSync(durablePath, "utf8");
+  for (const id of ["app", "neighbor"]) {
+    const reference = `- rollout_summaries/${id}.md (thread_id=${id})\n`;
+    durable = durable.replace(reference, reference + references);
+  }
+  writeFileSync(durablePath, durable);
+  writeFileSync(join(source.root, sharedPaths[0]), "thread_id: shared\n\n# Shared source\n\n- Keep shared evidence intact.\n");
+  writeFileSync(join(source.root, sharedPaths[1]), "# Shared source\n\n- Keep shared evidence intact.\n");
+  writeFileSync(join(source.home, "sessions/shared.jsonl"), JSON.stringify({ type: "session_meta", payload: { id: "shared", cwd: "/work/application" } }) + "\n");
+  const rawPath = join(source.root, "raw_memories.md");
+  const rawShared = "## Thread `shared`\n\n- Keep shared raw evidence intact.\n";
+  writeFileSync(rawPath, readFileSync(rawPath, "utf8") + "\n" + rawShared);
+  const originals = sharedPaths.map(path => [path, readFileSync(join(source.root, path))]);
+  const session = readFileSync(join(source.home, "sessions/shared.jsonl"));
+  const plan = await preview(source);
+  assert.equal(plan.actionable, true, plan.reason);
+  for (const path of sharedPaths) assert.ok(plan.retainedShared.some(section => section.path === path));
+  assert.ok(plan.retainedShared.some(section => section.path === "raw_memories.md" && section.content.includes(rawShared)));
+  const response = await forgetRequest(source, { action: "apply", plan, confirmedDirectory: plan.directory });
+  assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  for (const [path, content] of originals) assert.deepEqual(readFileSync(join(source.root, path)), content);
+  assert.ok(readFileSync(rawPath, "utf8").includes(rawShared));
+  assert.deepEqual(readFileSync(join(source.home, "sessions/shared.jsonl")), session);
+});
+
+test("a Task Group spanning selected and neighboring directories blocks Project Forget", async () => {
+  const source = fixture(), path = join(source.root, "MEMORY.md");
+  writeFileSync(path, readFileSync(path, "utf8").replace("cwd=/work/app;", "cwd=/work/app; cwd=/work/application;"));
+  const before = projectBytes(source.home);
+  const plan = await preview(source);
+  assert.equal(plan.actionable, false);
+  assert.ok(plan.blockers.some(blocker => blocker.includes("spans this directory and another project")));
+  const response = await forgetRequest(source, { action: "apply", plan, confirmedDirectory: plan.directory });
+  assert.equal(response.status, 400);
+  assert.deepEqual(projectBytes(source.home), before);
+});
+
+test("Project Apply revalidates unrelated source revisions changed during backup", async () => {
+  const source = fixture(), path = join(source.root, "rollout_summaries/neighbor.md");
+  const plan = await preview(source);
+  const before = projectBytes(source.root).map(([path, content]) => [path, content]);
+  const changed = readFileSync(path, "utf8") + "\nConcurrent unrelated evidence\n";
+  const database = readFileSync(plan.database.path);
+  const original = fs.writeFileSync;
+  let edited = false;
+  fs.writeFileSync = (destination, content, ...options) => {
+    original(destination, content, ...options);
+    if (!edited && String(destination).startsWith(join(source.home, "memory-forget-backups"))) {
+      edited = true;
+      original(path, changed);
+    }
+  };
+  syncBuiltinESMExports();
+  try {
+    const response = await forgetRequest(source, { action: "apply", plan, confirmedDirectory: plan.directory });
+    assert.equal(response.status, 409);
+    assert.equal(edited, true);
+    assert.equal(readFileSync(path, "utf8"), changed);
+    assert.deepEqual(projectBytes(source.root).filter(([path]) => path !== "rollout_summaries/neighbor.md").map(([path, content]) => [path, content]), before.filter(([path]) => path !== "rollout_summaries/neighbor.md"));
+    assert.deepEqual(readFileSync(plan.database.path), database);
+  } finally { fs.writeFileSync = original; syncBuiltinESMExports(); }
 });
