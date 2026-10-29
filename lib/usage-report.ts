@@ -95,8 +95,9 @@ export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
     const own = eventsBySession.get(session.id) ?? [];
     if (!own.length) return [];
     const parts = intervalsBySession.get(session.id) ?? [];
-    const start = Math.min(...own.map(e => e.t), ...parts.map(i => i.start));
-    const end = Math.max(...own.map(e => e.t), ...parts.map(i => i.end));
+    let start = Infinity, end = -Infinity;
+    for (const event of own) { start = Math.min(start, event.t); end = Math.max(end, event.t); }
+    for (const interval of parts) { start = Math.min(start, interval.start); end = Math.max(end, interval.end); }
     const activeSeconds = parts.reduce((n, i) => n + i.end - i.start, 0);
     return [{ ...session, ...sumTokens(own), start, end, activeSeconds,
       partial: parts.some(i => i.partial) || !activeSeconds, models: modelRows(own, parts) }];

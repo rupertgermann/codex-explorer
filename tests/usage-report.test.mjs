@@ -396,3 +396,20 @@ test("daily activity preserves local midnight across spring and autumn DST", () 
     }
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
+
+test("large event-only, interval-heavy and mixed sessions keep exact bounds without argument spreading", () => {
+  const dims = { model: "large", effort: "high", speed: "normal", sessionId: "large", turn: "turn" };
+  const event = index => ({ ...dims, t: epoch + index, usage: { ...emptyTokens(), input_tokens: 1, total_tokens: 1 }, source: "fixture", line: index + 1 });
+  const interval = (index, count) => ({ ...dims, effort: index % 2 ? "medium" : "high", start: epoch + index * 2 - count, end: epoch + index * 2 - count + 1, partial: false });
+  for (const [eventCount, intervalCount] of [[150000, 0], [1, 150000], [80000, 80000]]) {
+    const data = { since: epoch - 200000, until: epoch + 200000, generatedAt: epoch, sessions: [{ id: "large", title: "large", parent: "", project: "fixture", sources: [] }],
+      events: Array.from({ length: eventCount }, (_, i) => event(i)), intervals: Array.from({ length: intervalCount }, (_, i) => interval(i, intervalCount)), snapshots: [], coverage: {} };
+    const report = buildUsageReport(data);
+    assert.equal(report.summary.total_tokens, eventCount);
+    assert.equal(report.sessions[0].models[0].requests, eventCount);
+    assert.equal(report.sessions[0].start, epoch - intervalCount);
+    assert.equal(report.sessions[0].end, epoch + Math.max(eventCount - 1, intervalCount - 1));
+    assert.deepEqual(buildUsageReport(data, { model: "no-match" }).sessions, []);
+    assert.equal(buildUsageReport(data, { model: "large", effort: "high", speed: "normal", sessionId: "large" }).summary.total_tokens, eventCount);
+  }
+});
