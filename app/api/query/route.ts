@@ -14,6 +14,7 @@ export async function POST(request: Request) {
     try {
       const statement = db.prepare(sql);
       statement.setAllowBareNamedParameters(true);
+      const columns = [...new Set(statement.columns().map((column) => column.name))];
       const collected: Record<string, unknown>[] = [];
       let limited = false;
       for (const row of statement.iterate()) {
@@ -24,7 +25,7 @@ export async function POST(request: Request) {
         collected.push(row);
       }
       const rows = jsonRows(collected);
-      return NextResponse.json({ rows, columns: rows[0] ? Object.keys(rows[0]) : [], durationMs: performance.now() - startedAt, limited });
+      return NextResponse.json({ rows, columns, durationMs: performance.now() - startedAt, limited });
     } finally {
       db.close();
     }
