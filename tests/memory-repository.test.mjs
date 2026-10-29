@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
-import { MemoryRepository } from "../lib/memory.ts";
+import { atomicMemoryWrite, memoryHash, MemoryRepository } from "../lib/memory.ts";
 
 const roots = [];
 
@@ -106,4 +106,68 @@ test("saves atomically only when the opened revision is still current", () => {
   );
   assert.throws(() => repository.read("../outside.md"), { name: "MemoryPathError" });
   assert.throws(() => repository.read("not-markdown.txt"), { name: "MemoryPathError" });
+});
+
+test("a rejected atomic replacement preserves newer content and removes its temporary file", () => {
+  const root = memoryRoot();
+  const path = join(root, "MEMORY.md");
+  writeFileSync(path, "Newer content\n");
+
+  assert.throws(
+    () => atomicMemoryWrite(path, "Stale replacement\n", memoryHash("Old content\n")),
+    { name: "MemoryConflictError" },
+  );
+  assert.equal(readFileSync(path, "utf8"), "Newer content\n");
+  assert.deepEqual(readdirSync(root), ["MEMORY.md"]);
+});
+
+test("atomic writes create private UTF-8 files and keep them private after replacement", () => {
+  const root = memoryRoot();
+  const path = join(root, "notes", "private.md");
+  const previousMask = process.umask(0o022);
+  try {
+    atomicMemoryWrite(path, "# Grüße\n");
+    assert.equal(readFileSync(path, "utf8"), "# Grüße\n");
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+
+    atomicMemoryWrite(path, "# Überarbeitet\n", memoryHash("# Grüße\n"));
+    assert.equal(readFileSync(path, "utf8"), "# Überarbeitet\n");
+    assert.equal(statSync(path).mode & 0o777, 0o600);
+    assert.deepEqual(readdirSync(join(root, "notes")), ["private.md"]);
+  } finally {
+    process.umask(previousMask);
+  }
+});
+
+test("existing non-Markdown files cannot be read or overwritten as Memory", () => {
+  const root = memoryRoot();
+  const path = join(root, "settings.json");
+  writeFileSync(path, "Original settings\n");
+  const repository = new MemoryRepository(root);
+
+  assert.throws(() => repository.read("settings.json"), { name: "MemoryPathError" });
+  assert.throws(
+    () => repository.save({ path: "settings.json", content: "Replacement\n", expectedHash: memoryHash("Original settings\n") }),
+    { name: "MemoryPathError" },
+  );
+  assert.equal(readFileSync(path, "utf8"), "Original settings\n");
+});
+
+test("Memory reads and saves reject a directory link escaping the corpus", () => {
+  const parent = memoryRoot();
+  const root = join(parent, "memories");
+  const outside = join(parent, "outside");
+  mkdirSync(root);
+  mkdirSync(outside);
+  const path = join(outside, "private.md");
+  writeFileSync(path, "Outside content\n");
+  symlinkSync(outside, join(root, "linked"), "dir");
+  const repository = new MemoryRepository(root);
+
+  assert.throws(() => repository.read("linked/private.md"), { name: "MemoryPathError" });
+  assert.throws(
+    () => repository.save({ path: "linked/private.md", content: "Replacement\n", expectedHash: memoryHash("Outside content\n") }),
+    { name: "MemoryPathError" },
+  );
+  assert.equal(readFileSync(path, "utf8"), "Outside content\n");
 });
