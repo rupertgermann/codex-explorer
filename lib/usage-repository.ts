@@ -35,7 +35,7 @@ function tokens(value: unknown): Tokens | null {
 
 const sameTokens = (a: Tokens, b: Tokens) => TOKEN_FIELDS.every(key => a[key] === b[key]);
 const validTokens = (usage: Tokens) => usage.total_tokens === usage.input_tokens + usage.output_tokens && usage.cached_input_tokens <= usage.input_tokens && usage.reasoning_output_tokens <= usage.output_tokens;
-type CompactionRequest = { event: UsageEvent; threadUsage: Tokens | null; owned: boolean; accounted: boolean; rewritten?: boolean };
+type CompactionRequest = { event: UsageEvent; threadUsage: Tokens | null; owned: boolean; coveringCounter: Pick<UsageEvent, "t" | "turn"> | null; rewritten?: boolean };
 
 type Turn = { start?: number; end?: number; actualStart?: number; actualEnd?: number; last: number; firstEvent?: number; contexts: (Dimensions & { t: number })[] };
 
@@ -83,26 +83,22 @@ export async function readUsageData(since: number, until: number, options: Usage
   const compactions = new Map<string, CompactionRequest>();
   const accountedCompactions = new Set<string>();
   const initialSnapshots: { event: UsageEvent; total: Tokens; last: Tokens }[] = [];
-  const finalSnapshots: { sessionId: string; source: string; t: number; total: Tokens }[] = [];
-  for (const root of new Set(roots)) {
-    const repository = new SessionRepository(root);
-    for (const file of (await repository.catalog({ refresh: true })).sessions) {
+  const counterSnapshots: { sessionId: string; source: string; t: number; total: Tokens }[] = [];
+  const catalogs = await Promise.all(roots.map(async root => ({ root, sessions: (await new SessionRepository(root).catalog({ refresh: true })).sessions })));
+  const sourcesBySession = Map.groupBy(catalogs.flatMap(catalog => catalog.sessions), session => session.id);
+  const repeatedSessions = new Set([...sourcesBySession].filter(([, files]) => files.length > 1).map(([id]) => id));
+  for (const { root, sessions } of catalogs) {
+    for (const file of sessions) {
       const key = sessionFileKey(file.path);
       if (seenFiles.has(key)) continue;
       seenFiles.add(key);
       options.signal?.throwIfAborted();
       data.coverage.files++;
       if (file.startedAt / 1000 >= until) continue;
-      if (!file.path.endsWith(".zst") && Math.max(file.startedAt, file.modifiedAt) / 1000 < since) {
-        // Restored files may have old mtimes: inspect the tail before skipping them.
-        const tail = (await repository.rawPage(file.path, { offset: Math.max(0, file.size - 128 * 1024), byteLimit: 128 * 1024 })).text;
-        const times = [...tail.matchAll(/"timestamp"\s*:\s*"([^"]+)"/g)].map(m => stamp(m[1]));
-        if (!times.some(t => t >= since)) continue;
-      }
       data.coverage.scanned++;
       const source = join(root, file.path), turns = new Map<string, Turn>();
       const requests = new Map<string, CompactionRequest>(), compacted = new Set<string>();
-      let latestResponse = "", lastCounterTime = 0;
+      let latestResponse = "";
       let inheritedCounter: Tokens | null = null;
       const events: UsageEvent[] = [], snapshots: UsageData["snapshots"] = [];
       let sid = file.id, parent = file.parentThreadId, title = names.get(sid) || sid;
@@ -112,7 +108,7 @@ export async function readUsageData(since: number, until: number, options: Usage
         if (!turns.has(turnId)) turns.set(turnId, { last: 0, contexts: [] });
         return turns.get(turnId)!;
       };
-      const datedUsage = (event: UsageEvent) => {
+      const datedUsage = (event: Pick<UsageEvent, "t" | "turn">) => {
         if (!rewritten) return true;
         const turn = turns.get(event.turn);
         return turn?.actualStart !== undefined && turn.actualEnd !== undefined && turn.actualStart >= Math.floor(created)
@@ -144,7 +140,7 @@ export async function readUsageData(since: number, until: number, options: Usage
           const requestTurn = string(p.turn_id) || turnId;
           const context = turns.get(requestTurn)?.contexts.at(-1) ?? current;
           requests.set(responseId, { event: { ...context, model: string(p.model) || context.model, t, sessionId: sid, turn: requestTurn, usage, source, line, responseId },
-            threadUsage: tokens(p.thread_token_usage), owned, accounted: false });
+            threadUsage: tokens(p.thread_token_usage), owned, coveringCounter: null });
           latestResponse = responseId;
           return;
         }
@@ -205,7 +201,7 @@ export async function readUsageData(since: number, until: number, options: Usage
         }
         const total = tokens(object(p.info).total_token_usage);
         if (!total) return;
-        lastCounterTime = t;
+        if (repeatedSessions.has(sid) && t < until && (!previous || !sameTokens(previous, total))) counterSnapshots.push({ sessionId: sid, source, t, total });
         if (!previous && inheritedCounter && sameTokens(inheritedCounter, total)) { previous = total; return; }
         if (!owned) { previous = total; return; } // Baseline inherited counters without counting them.
         const initial = previous === null;
@@ -225,7 +221,7 @@ export async function readUsageData(since: number, until: number, options: Usage
           return;
         }
         const pending = requests.get(latestResponse);
-        if (pending && (sameTokens(pending.event.usage, delta) || pending.threadUsage && sameTokens(pending.threadUsage, total))) pending.accounted = true;
+        if (pending && (sameTokens(pending.event.usage, delta) || pending.threadUsage && sameTokens(pending.threadUsage, total))) pending.coveringCounter ??= { t, turn: turnId };
         const turn = getTurn();
         turn.firstEvent = Math.min(turn.firstEvent ?? t, t);
         if (t >= since && t < until) {
@@ -236,13 +232,12 @@ export async function readUsageData(since: number, until: number, options: Usage
         }
       }, { signal: options.signal, maxRecordBytes: 32 * 1024 * 1024 });
       data.coverage.skippedRecords += scan.skippedLines;
-      if (previous) finalSnapshots.push({ sessionId: sid, source, t: lastCounterTime, total: previous });
       if (rewritten) data.coverage.rewrittenSessions++;
       for (const responseId of compacted) {
         const request = requests.get(responseId);
         if (!request) continue;
         request.rewritten = !datedUsage(request.event);
-        if (request.accounted) accountedCompactions.add(responseId);
+        if (request.coveringCounter && datedUsage(request.coveringCounter)) accountedCompactions.add(responseId);
         const previous = compactions.get(responseId);
         if (!previous || request.event.t < previous.event.t || request.event.t === previous.event.t && request.owned && !previous.owned) compactions.set(responseId, request);
       }
@@ -282,7 +277,7 @@ export async function readUsageData(since: number, until: number, options: Usage
     }
   }
   // Resumed segments can retain the same session ID and start at a prior file's lifetime total.
-  const priorBySession = Map.groupBy(finalSnapshots, snapshot => snapshot.sessionId);
+  const priorBySession = Map.groupBy(counterSnapshots, snapshot => snapshot.sessionId);
   for (const initial of initialSnapshots) {
     const baseline = emptyTokens();
     for (const key of TOKEN_FIELDS) baseline[key] = initial.total[key] - initial.last[key];

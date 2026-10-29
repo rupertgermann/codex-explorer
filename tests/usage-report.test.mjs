@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -318,13 +318,45 @@ test("overlapping copied and resumed streams deduplicate after inherited counter
   const home = mkdtempSync(join(tmpdir(), "codex-usage-resumed-overlap-"));
   try {
     const write = (path, start, rows) => writeFileSync(join(home, path), [record(start, "session_meta", { id: "same" }), ...rows].map(r => JSON.stringify(r)).join("\n"));
-    write("a-first.jsonl", 0, [count(10, 100)]);
     write("b-full-copy.jsonl", 0, [count(10, 100), count(20, 150), count(30, 170)]);
     const first = count(20, 150); first.payload.info.last_token_usage = { input_tokens: 50, output_tokens: 0, total_tokens: 50 };
     write("c-resumed.jsonl", 15, [first, count(30, 170)]);
     const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
     assert.equal(buildUsageReport(data).summary.total_tokens, 170);
     assert.equal(data.events.length, 3);
-    assert.equal(data.coverage.duplicateEvents, 3);
+    assert.equal(data.coverage.duplicateEvents, 2);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("an old plain source outside the period still establishes a resumed baseline", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-old-baseline-"));
+  try {
+    const write = (path, start, rows, modified) => {
+      writeFileSync(join(home, path), [record(start, "session_meta", { id: "same" }), ...rows].map(r => JSON.stringify(r)).join("\n"));
+      utimesSync(join(home, path), epoch + modified, epoch + modified);
+    };
+    write("first.jsonl", 0, [count(10, 100)], 10);
+    const first = count(20, 150); first.payload.info.last_token_usage = { input_tokens: 50, output_tokens: 0, total_tokens: 50 };
+    write("resume.jsonl", 15, [first], 20);
+    const data = await readUsageData(epoch + 15, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 50);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("an excluded restored counter cannot suppress a valid original compaction", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-undated-counter-"));
+  try {
+    const usage = { input_tokens: 50, output_tokens: 0, total_tokens: 50 };
+    const original = [record(0, "session_meta", { id: "original" }), usageRecord(10, "compact", usage), compacted("compact", 11)];
+    const copy = [record(50, "session_meta", { id: "copy" }), event(50, "task_started", { turn_id: "copy", started_at: epoch }),
+      usageRecord(50, "compact", usage), event(50, "token_count", { info: { total_token_usage: usage } }), compacted("compact", 50),
+      event(50, "task_complete", { turn_id: "copy", started_at: epoch, completed_at: epoch + 20 })];
+    writeFileSync(join(home, "original.jsonl"), original.map(r => JSON.stringify(r)).join("\n"));
+    writeFileSync(join(home, "copy.jsonl"), copy.map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 50);
+    assert.equal(data.events[0].sessionId, "original");
+    assert.equal(data.coverage.undatedUsage, 1);
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
