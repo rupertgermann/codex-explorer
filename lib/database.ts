@@ -196,7 +196,7 @@ export function catalog() {
 
 export function jsonValue(value: unknown): JsonValue {
   if (value == null) return null;
-  if (typeof value === "bigint") return Number(value);
+  if (typeof value === "bigint") return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : value.toString();
   if (typeof value === "number" || typeof value === "boolean") return value;
   if (value instanceof Uint8Array) return `<BLOB ${value.byteLength} bytes>`;
   const text = String(value);

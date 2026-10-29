@@ -38,3 +38,21 @@ database.exec("CREATE TABLE empty_records (id INTEGER PRIMARY KEY, note TEXT)");
 const insert = database.prepare("INSERT INTO atlas_records (atlas_note) VALUES (?)");
 for (let index = 1; index <= 65; index++) insert.run(`Record ${index}`);
 database.close();
+
+// Real API fixtures for exact integers and usage regeneration/restoration.
+const integerDatabase = new DatabaseSync(join(databaseRoot, "search-fixture.sqlite"));
+integerDatabase.exec("CREATE TABLE exact_integers (id INTEGER PRIMARY KEY, value INTEGER)");
+const exactInsert = integerDatabase.prepare("INSERT INTO exact_integers VALUES (?, ?)");
+[9007199254740993n, -9007199254740993n, -9223372036854775808n].forEach((value, index) => exactInsert.run(index + 1, value));
+integerDatabase.close();
+writeFileSync(join(sessionsRoot, "usage-fixture.jsonl"), [
+  { timestamp: "2026-09-04T00:00:00Z", type: "session_meta", payload: { id: "usage-fixture", cwd: "/fixture/usage" } },
+  { timestamp: "2026-09-04T00:00:01Z", type: "event_msg", payload: { type: "task_started", turn_id: "one" } },
+  { timestamp: "2026-09-04T00:00:02Z", type: "turn_context", payload: { model: "fixture-fast", effort: "high", service_tier: "priority", turn_id: "one" } },
+  { timestamp: "2026-09-04T00:00:10Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 90, output_tokens: 10 } } } },
+  { timestamp: "2026-09-04T00:00:20Z", type: "event_msg", payload: { type: "task_complete", turn_id: "one" } },
+  { timestamp: "2026-09-04T00:01:00Z", type: "event_msg", payload: { type: "task_started", turn_id: "two" } },
+  { timestamp: "2026-09-04T00:01:01Z", type: "turn_context", payload: { model: "fixture-normal", effort: "low", service_tier: "default", turn_id: "two" } },
+  { timestamp: "2026-09-04T00:01:10Z", type: "event_msg", payload: { type: "token_count", info: { total_token_usage: { input_tokens: 130, output_tokens: 20 } } } },
+  { timestamp: "2026-09-04T00:01:20Z", type: "event_msg", payload: { type: "task_complete", turn_id: "two" } },
+].map(row => JSON.stringify(row)).join("\n") + "\n");

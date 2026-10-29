@@ -405,3 +405,10 @@ test("compressed preview limits apply to decoded bytes and full scans continue t
   writeFileSync(join(root, "corrupt.jsonl.zst"), "not zstd");
   await assert.rejects(repository.read("corrupt.jsonl.zst"));
 });
+
+test("cached session headers retain paths relative to each configured root", async () => {
+  const root = sessionRoot();
+  writeSession(root, "nested/session.jsonl", [{ timestamp: "2026-09-01T00:00:00Z", type: "session_meta", payload: { id: "same", cwd: "/fixture" } }]);
+  assert.equal((await new SessionRepository(root).catalog({ refresh: true })).sessions[0].path, "nested/session.jsonl");
+  assert.equal((await new SessionRepository(join(root, "nested")).catalog({ refresh: true })).sessions[0].path, "session.jsonl");
+});

@@ -46,9 +46,10 @@ export function modelRows(events: UsageEvent[], intervals: ActivityInterval[]) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(event);
   }
+  const intervalsByDimension = Map.groupBy(intervals, dimensionKey);
   return [...groups].map(([key, selected]) => {
     const { model, effort, speed } = selected[0];
-    const parts = intervals.filter(i => dimensionKey(i) === key);
+    const parts = intervalsByDimension.get(key) ?? [];
     const activeSeconds = parts.reduce((n, i) => n + i.end - i.start, 0);
     return { key, model, effort, speed, ...sumTokens(selected), sessions: new Set(selected.map(e => e.sessionId)).size,
       requests: selected.length, activeSeconds, partial: parts.some(i => i.partial) || !activeSeconds };
@@ -73,8 +74,13 @@ export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[]
     bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
     bucket[parents.has(event.sessionId) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
   }
-  for (const interval of intervals) for (const bucket of buckets) {
-    bucket.activeSeconds += Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start));
+  for (const interval of intervals) {
+    const first = hours === 24 ? 0 : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)));
+    const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)));
+    for (let index = first; index < last; index++) {
+      const bucket = buckets[index];
+      bucket.activeSeconds += Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start));
+    }
   }
   return buckets;
 }
@@ -211,7 +217,7 @@ export function csvText(rows: Record<string, unknown>[]) {
   const keys = Object.keys(rows[0]);
   const cell = (value: unknown) => {
     let text = value == null ? "" : typeof value === "object" ? JSON.stringify(value) : String(value);
-    if (typeof value === "string" && /^[\s]*[=+@-]/.test(text)) text = `'${text}`;
+    if (typeof value === "string" && /^[\s]*[=+@-]/.test(text) && !/^-(?:0|[1-9]\d*)$/.test(text)) text = `'${text}`;
     return `"${text.replaceAll('"', '""')}"`;
   };
   return "\uFEFF" + [keys.map(cell).join(";"), ...rows.map(row => keys.map(key => cell(row[key])).join(";"))].join("\r\n");

@@ -31,7 +31,9 @@ export function GET(request: NextRequest) {
 
     const db = openReadonly(path);
     try {
-      const rows = jsonRows(db.prepare(sql).all(...parameters, pageSize, (page - 1) * pageSize) as Record<string, unknown>[]);
+      const statement = db.prepare(sql);
+      statement.setReadBigInts(true);
+      const rows = jsonRows(statement.all(...parameters, pageSize, (page - 1) * pageSize));
       let total = table.rowEstimate;
       if (search) {
         const count = db.prepare(`SELECT COUNT(*) AS count FROM ${quoteIdentifier(table.name)} ${where}`).get(...parameters) as { count: number | bigint };

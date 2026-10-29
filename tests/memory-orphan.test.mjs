@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,7 +15,7 @@ function fixture() {
   const memoryRoot = join(base, "memories");
   const activeSessionsRoot = join(base, "sessions");
   const archivedSessionsRoot = join(base, "archived_sessions");
-  const backupRoot = join(base, "backups");
+  const backupRoot = join(base, "memories-backups");
   mkdirSync(join(memoryRoot, "rollout_summaries"), { recursive: true });
   mkdirSync(activeSessionsRoot, { recursive: true });
   mkdirSync(archivedSessionsRoot, { recursive: true });
@@ -179,4 +179,35 @@ test("orphan inspection resolves old plain rollout references to compressed acti
   const plan = await service.inspect("rollout_summaries/candidate.md");
   assert.equal(plan.eligible, false);
   assert.deepEqual(plan.sessionLinks.map(s => s.path), ["active.jsonl.zst", "archived.jsonl.zst"]);
+});
+
+for (const nested of [false, true]) test(`orphan backups reject a linked ${nested ? "ancestor" : "root"} into Memory`, async () => {
+  const { memoryRoot, backupRoot, service } = fixture();
+  symlinkSync(memoryRoot, backupRoot, "dir");
+  if (nested) service.options.backupRoot = join(backupRoot, "not-created", "backups");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
+  const before = treeBytes(memoryRoot);
+  await assert.rejects(service.apply(plan, confirmation(plan)), /outside the Memory corpus/);
+  assert.deepEqual(treeBytes(memoryRoot), before);
+});
+
+test("linked Memory roots allow verified external backups with private modes under umask 022", async () => {
+  const { base, memoryRoot, backupRoot, activeSessionsRoot, archivedSessionsRoot } = fixture();
+  const alias = join(base, "memory-alias");
+  symlinkSync(memoryRoot, alias, "dir");
+  chmodSync(memoryRoot, 0o700);
+  const candidate = join(memoryRoot, "rollout_summaries/candidate.md");
+  chmodSync(candidate, 0o600);
+  const before = readFileSync(candidate);
+  const service = new MemoryOrphanService(alias, { backupRoot, activeSessionsRoot, archivedSessionsRoot });
+  const plan = await service.inspect("rollout_summaries/candidate.md");
+  const previous = process.umask(0o022);
+  let result;
+  try { result = await service.apply(plan, confirmation(plan)); }
+  finally { process.umask(previous); }
+  assert.equal(existsSync(candidate), false);
+  const manifest = JSON.parse(readFileSync(result.manifestPath, "utf8"));
+  assert.deepEqual(readFileSync(manifest.backupPath), before);
+  for (const file of [result.manifestPath, manifest.backupPath]) assert.equal(statSync(file).mode & 0o777, 0o600);
+  for (let dir = dirname(manifest.backupPath); dir !== base; dir = dirname(dir)) assert.equal(statSync(dir).mode & 0o777, 0o700);
 });

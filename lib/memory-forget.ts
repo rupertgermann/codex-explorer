@@ -1,3 +1,4 @@
+import { assertExternalMemoryBackup } from "./memory-backup.ts";
 import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
@@ -6,7 +7,6 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { openReadonly } from "./database.ts";
 import { atomicMemoryWrite, memoryHash, MemoryConflictError, MemoryRepository, resolveMemoryMarkdownPath } from "./memory.ts";
@@ -561,10 +561,7 @@ export class MemoryForgetService {
     const tombstonePath = linkedNote?.path ?? `extensions/ad_hoc/notes/${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}-forget-${plan.fingerprint.slice(0, 10)}-${randomUUID().slice(0, 8)}.md`;
     this.rejectDuplicateTombstone(plan.fingerprint, tombstonePath);
     if (!linkedNote && existsSync(this.safeNewPath(tombstonePath))) throw new MemoryConflictError("The planned tombstone path already exists.");
-    let backupParent = this.backupRoot;
-    while (!existsSync(backupParent)) backupParent = dirname(backupParent);
-    const canonicalBackup = resolve(realpathSync(backupParent), relative(backupParent, this.backupRoot));
-    if (insideProject(canonicalBackup, realpathSync(this.root))) throw new Error("Forget backups must be stored outside the Memory corpus.");
+    assertExternalMemoryBackup(this.root, this.backupRoot);
     const transactionRoot = join(this.backupRoot, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`);
     mkdirSync(transactionRoot, { recursive: true, mode: 0o700 });
     for (const [path, content] of originals) {
