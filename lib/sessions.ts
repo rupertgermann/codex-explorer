@@ -198,7 +198,8 @@ async function summary(root: string, path: string): Promise<SessionSummary> {
   const record = await firstRecord(absolutePath);
   const payload = record?.type === "session_meta" ? object(record.payload) : {};
   const cwd = string(payload.cwd);
-  const parentThreadId = string(payload.parent_thread_id);
+  const spawn = object(object(object(payload.source).subagent).thread_spawn);
+  const parentThreadId = string(payload.parent_thread_id) || string(spawn.parent_thread_id);
   return {
     id: string(payload.id) || basename(sessionFileKey(path), ".jsonl"),
     path,
