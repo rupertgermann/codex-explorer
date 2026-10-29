@@ -20,3 +20,4 @@
 *.csv
 .agents/*
 .stryker-tmp/
+.scratch/
