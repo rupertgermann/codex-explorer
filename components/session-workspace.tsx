@@ -325,7 +325,7 @@ export function SessionWorkspace({ initialPath, initialQuery, active = true }: {
         if (controller.signal.aborted) return;
         if (update.type === "entry") entries.push(update.entry);
         if (update.type === "progress") {
-          setFullProgress(update.totalBytes ? update.scannedBytes / update.totalBytes : 1);
+          setFullProgress(update.totalBytes ? update.scannedBytes / update.totalBytes : 0);
           setSession((current) => current?.path === path
             ? { ...current, entries: [...entries], metrics: { ...current.metrics, scannedBytes: update.scannedBytes } }
             : current);
@@ -519,7 +519,7 @@ export function SessionWorkspace({ initialPath, initialQuery, active = true }: {
 
             {viewer === "transcript" && session.truncated && <div className="flex items-start justify-between gap-3 border-b border-amber-200 bg-amber-50 dark:border-amber-400/25 dark:bg-amber-400/10 px-4 py-3 text-xs leading-5 text-amber-800 dark:text-amber-200">
               <span className="flex min-w-0 items-start gap-2"><AlertTriangle className="mt-0.5 size-3.5 shrink-0" /><span>
-                {session.truncation.scanLimitReached && <>Preview stopped after {formatBytes(session.metrics.scannedBytes)} of {formatBytes(session.size)}. Scan the complete transcript to continue.</>}
+                {session.truncation.scanLimitReached && <>Preview stopped after {formatBytes(session.metrics.scannedBytes)}{session.path.endsWith(".zst") ? " of decompressed JSONL" : ` of ${formatBytes(session.size)}`}. Scan the complete transcript to continue.</>}
                 {session.truncation.entryLimitReached && <> The transcript reached its {formatNumber(fullScanComplete ? 20_000 : 1_500)}-entry display limit.</>}
                 {session.truncation.oversizedRecords > 0 && <> {formatNumber(session.truncation.oversizedRecords)} oversized JSONL {session.truncation.oversizedRecords === 1 ? "record was" : "records were"} omitted from the transcript; every byte remains available in Raw JSONL.</>}
                 {session.truncation.invalidRecords > 0 && <> {formatNumber(session.truncation.invalidRecords)} invalid JSONL {session.truncation.invalidRecords === 1 ? "record could" : "records could"} not be parsed; the raw bytes remain available.</>}

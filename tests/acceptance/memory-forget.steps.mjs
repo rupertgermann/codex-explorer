@@ -117,8 +117,8 @@ When("I confirm one exact durable source", function () {
   });
 });
 
-When("I apply the Forget plan", function () {
-  this.result = new MemoryForgetService(this.root, join(this.base, "backups")).apply(this.plan);
+When("I apply the Forget plan", async function () {
+  this.result = await new MemoryForgetService(this.root, join(this.base, "backups")).apply(this.plan);
 });
 
 When("the positive Memory resurfaces in a later rollout", function () {

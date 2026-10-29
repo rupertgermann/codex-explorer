@@ -43,7 +43,7 @@ See the [Memory Forget user guide](docs/memory-forgetting.md) for the individual
 
 ### Session archive
 
-- Indexes every JSONL file under `~/.codex/sessions` without scanning the full archive on page load
+- Indexes plain `.jsonl` and Zstandard-compressed `.jsonl.zst` sessions under `~/.codex/sessions` without scanning the full archive on page load
 - Caches the catalog until explicitly refreshed and filters sessions by project, month, and provenance, with a single reset action
 - Browses human messages and tool calls from current and legacy session formats, excluding explicitly tagged injected context and deduplicating mirrored conversation records
 - Distinguishes user, Codex-subtask, automation, and legacy sessions and browses their parent-child relationships as an expandable thread forest; lists reveal more sessions in batches
@@ -52,7 +52,7 @@ See the [Memory Forget user guide](docs/memory-forgetting.md) for the individual
 
 ### Usage report
 
-- Scans active and archived sessions on demand, with cancellation and deduplication of repeated counters and copied events
+- Scans plain and Zstandard-compressed active and archived sessions on demand, with cancellation and deduplication of repeated counters and copied events. Plain copies take precedence within a directory; active copies take precedence over the same archived rollout
 - Groups input, cached input, output, and reasoning tokens by model, reasoning effort, and historical speed (fast / normal / unknown), with separate main-session and subagent totals
 - Reports active session hours, overlap-merged active clock hours, per-session model breakdowns, and one-hour or six-hour usage windows
 - Charts hourly usage alongside recorded account quota, with day/range selection, zoom, pan, fullscreen, and daily totals
@@ -68,7 +68,7 @@ The latest successful telemetry is stored atomically in the gitignored `.cache/u
 
 All report processing runs in the app's TypeScript runtime; no Python process, external account API, or private reference-report directory is required.
 
-Tokens are input + output; cached input and reasoning output are subsets. Repeated cumulative counters and duplicated files do not add usage twice. Model and effort come from each turn context; speed comes from historical `service_tier` settings (`priority` = fast, `default` = normal). Missing settings remain unknown. Active session hours exclude pauses between turns and count concurrent sessions separately; active clock hours merge overlap. Missing task boundaries make rates approximate. Restored streams with rewritten timestamps are excluded from dated token/quota totals and still block unsafe quota attribution.
+Tokens are input + output; cached input and reasoning output are subsets. Repeated cumulative counters and duplicated files do not add usage twice. Forks without replayed counters start from their first recorded request rather than inherited lifetime usage. Foreign thread snapshots and resumed segments with a matching earlier counter establish inherited baselines. Separate compaction usage records are matched to their compaction marker by response ID and included once unless already covered by a cumulative counter. Model and effort come from each turn context; speed comes from historical `service_tier` settings (`priority` = fast, `default` = normal). Missing settings remain unknown. Active session hours exclude pauses between turns and count concurrent sessions separately; active clock hours merge overlap. Missing task boundaries make rates approximate. Usage from restored streams is excluded when its recorded time cannot be reconciled with explicit task boundaries. Short task-start logging delays preserve requests inside those boundaries. Shifted task timestamps still make activity approximate and block unsafe quota attribution.
 
 Quota is account-wide, so model filters never alter its timeline. Each limit ID/window is kept separate. Resets, stale readings and gaps over five minutes break the line. Comparisons require continuous isolated local activity, matching model/effort/speed and a configurable minimum measured duration. Percentage points are observations, not token prices or proof that one setting is cheaper; remote usage is unobserved. The data-quality section reports skipped telemetry and unknown speed.
 
@@ -77,7 +77,7 @@ Quota is account-wide, so model filters never alter its timeline. Each limit ID/
 - Database browsing and queries use SQLite's read-only flag; the query endpoint rejects write and schema-changing statements. The only database mutation is a separately confirmed **Forget project…** transaction, which deletes matching `stage1_outputs` rows from the single active `memories_<version>.sqlite` store. Scheduler jobs and development/snapshot databases remain unchanged.
 - Memory files change only when you explicitly press **Save**, **Apply Forget plan**, or confirm the separate advanced **Delete orphaned file…** workflow. Save rejects stale revisions before atomic replacement. Forget remains the only regular deletion path. Orphan cleanup blocks referenced files, session-linked files, positive Memories, and aggregate files; it revalidates the exact revision and verifies an external backup before deleting one confirmed file.
 - Forget uses verified backups outside the Memory corpus and attempts coordinated rollback on runtime failures without overwriting concurrent changes. A hard process or system crash can require manual recovery. Forget is not complete erasure: backups, tombstones, and session history remain, and there is no automatic resurfacing watcher or user-facing Undo.
-- Session files are strictly read-only. Large previews state exactly why content was omitted. A complete transcript scan reads the full file while retaining at most 20,000 entries; the Raw JSONL viewer reads one fixed-size byte page at a time.
+- Session files are strictly read-only. Large previews state exactly why content was omitted. A complete transcript scan reads the full file while retaining at most 20,000 entries; the Raw JSONL viewer retains one fixed-size page of decoded bytes at a time. Compressed raw pages stream the file to determine its decoded size; session sizes in the catalog describe disk storage.
 - Usage reports read existing local telemetry, never fetch live account limits, and write only their local report cache. Cached reports and external Forget/orphan-cleanup backups can contain sensitive data.
 - The app reads whatever is in `~/.codex` — that can include prompts, conversations, and memories. Treat any screenshot, CSV export, or shared query result as potentially sensitive.
 - Intended for `localhost` only. The API routes have **no authentication**, so anyone who can reach the port can read databases, edit or delete eligible Memory content, and apply Project Forget database changes. Do not deploy this or bind it to a public interface.

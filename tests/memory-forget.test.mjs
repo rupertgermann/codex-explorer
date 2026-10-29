@@ -45,7 +45,7 @@ function selection(root) {
 
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
-test("preview finds exact sections and never writes", () => {
+test("preview finds exact sections and never writes", async () => {
   const { base, root } = fixture();
   const before = bytes(root);
   const preview = new MemoryForgetService(root, join(base, "backups")).preview(selection(root));
@@ -56,7 +56,7 @@ test("preview finds exact sections and never writes", () => {
   assert.deepEqual(bytes(root), before);
 });
 
-test("preview blocks ambiguous durable matches until exact sections are confirmed", () => {
+test("preview blocks ambiguous durable matches until exact sections are confirmed", async () => {
   const { base, root } = fixture({ ambiguous: true });
   const service = new MemoryForgetService(root, join(base, "backups"));
   const first = service.preview(selection(root));
@@ -69,7 +69,7 @@ test("preview blocks ambiguous durable matches until exact sections are confirme
   assert.equal(confirmed.sections.filter(({ kind }) => kind === "durable").length, 1);
 });
 
-test("preview offers a normalized-term match but requires explicit confirmation", () => {
+test("preview offers a normalized-term match but requires explicit confirmation", async () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "MEMORY.md"), "# Memory\n\n- Never add speculative features; keep every change simple. [Task 12] [ad-hoc note]\n");
   const service = new MemoryForgetService(root, join(base, "backups"));
@@ -85,7 +85,7 @@ test("preview offers a normalized-term match but requires explicit confirmation"
   assert.equal(confirmed.sections.filter(({ kind }) => kind === "durable").length, 1);
 });
 
-test("preview follows durable Task, thread, rollout, and ad-hoc provenance", () => {
+test("preview follows durable Task, thread, rollout, and ad-hoc provenance", async () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "MEMORY.md"), [
     "# Task Group: Simplicity\n",
@@ -109,7 +109,7 @@ test("preview follows durable Task, thread, rollout, and ad-hoc provenance", () 
   assert.ok(plan.sections.find(({ kind }) => kind === "ad-hoc").signals.includes("ad-hoc marker"));
 });
 
-test("apply follows enclosing task provenance without matching unrelated paths", () => {
+test("apply follows enclosing task provenance without matching unrelated paths", async () => {
   const { base, root } = fixture({ adHoc: false });
   writeFileSync(join(root, "memory_summary.md"), [
     "# Summary\n",
@@ -156,7 +156,7 @@ test("apply follows enclosing task provenance without matching unrelated paths",
   assert.equal(plan.sections.find(({ kind }) => kind === "rollout").path, "rollout_summaries/one.md");
   assert.equal(plan.sections.some(({ path }) => path === "rollout_summaries/unrelated.md"), false);
 
-  const result = service.apply(plan);
+  const result = await service.apply(plan);
 
   assert.equal(result.verification, "suppressed");
   assert.doesNotMatch(readFileSync(join(root, "MEMORY.md"), "utf8"), /PR #1390/);
@@ -166,7 +166,7 @@ test("apply follows enclosing task provenance without matching unrelated paths",
   assert.equal(existsSync(join(root, "rollout_summaries", "unrelated.md")), true);
 });
 
-test("preview reports no match and rejects stale or invalid summary selections", () => {
+test("preview reports no match and rejects stale or invalid summary selections", async () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "memory_summary.md"), "# Summary\n\n- Something with no durable source.\n");
   const service = new MemoryForgetService(root, join(base, "backups"));
@@ -177,13 +177,13 @@ test("preview reports no match and rejects stale or invalid summary selections",
   assert.throws(() => service.preview({ ...current, summaryLine: 1 }), /top-level Memory Summary entry/);
 });
 
-test("apply removes only confirmed sections, creates a backup, and never touches sessions", () => {
+test("apply removes only confirmed sections, creates a backup, and never touches sessions", async () => {
   const { base, root } = fixture();
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
   const sessionBefore = readFileSync(join(root, "sessions", "thread-one.jsonl"));
 
-  const result = service.apply(plan);
+  const result = await service.apply(plan);
 
   assert.equal(result.rolledBack, false);
   assert.equal(result.verification, "suppressed");
@@ -207,18 +207,18 @@ test("apply removes only confirmed sections, creates a backup, and never touches
   assert.equal(service.recheck(plan).resurfaced.length, 0);
 });
 
-test("apply aborts before writing when any planned revision is stale", () => {
+test("apply aborts before writing when any planned revision is stale", async () => {
   const { base, root } = fixture();
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
   writeFileSync(join(root, "raw_memories.md"), readFileSync(join(root, "raw_memories.md"), "utf8") + "\nChanged concurrently.\n");
   const before = bytes(root);
 
-  assert.throws(() => service.apply(plan), { name: "MemoryConflictError" });
+  await assert.rejects(async () => await service.apply(plan), { name: "MemoryConflictError" });
   assert.deepEqual(bytes(root), before);
 });
 
-test("apply rolls all writes back after an intermediate filesystem failure", () => {
+test("apply rolls all writes back after an intermediate filesystem failure", async () => {
   const { base, root } = fixture({ adHoc: false });
   writeFileSync(join(root, "extensions"), "blocks the tombstone directory");
   const service = new MemoryForgetService(root, join(base, "backups"));
@@ -226,31 +226,31 @@ test("apply rolls all writes back after an intermediate filesystem failure", () 
   const before = bytes(root);
 
   let failure;
-  assert.throws(() => { try { service.apply(plan); } catch (error) { failure = error; throw error; } }, /rolled back/i);
+  await assert.rejects(async () => { try { await service.apply(plan); } catch (error) { failure = error; throw error; } }, /rolled back/i);
   assert.deepEqual(bytes(root), before);
   assert.ok(failure instanceof Error);
 });
 
-test("apply creates exactly one new tombstone and repeated apply cannot duplicate it", () => {
+test("apply creates exactly one new tombstone and repeated apply cannot duplicate it", async () => {
   const { base, root } = fixture({ adHoc: false });
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
 
-  const result = service.apply(plan);
+  const result = await service.apply(plan);
   const notes = readdirSync(join(root, "extensions", "ad_hoc", "notes"));
   assert.equal(notes.length, 1);
   assert.match(readFileSync(join(root, result.tombstonePath), "utf8"), /action: delete/);
-  assert.throws(() => service.apply(plan), { name: "MemoryConflictError" });
+  await assert.rejects(async () => await service.apply(plan), { name: "MemoryConflictError" });
   assert.equal(readdirSync(join(root, "extensions", "ad_hoc", "notes")).length, 1);
 });
 
-test("apply converts one of multiple linked notes and removes the other positive copies", () => {
+test("apply converts one of multiple linked notes and removes the other positive copies", async () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "extensions", "ad_hoc", "notes", "second.md"), "# Second source\n\n- Keep changes simple and never add speculative features.\n- Keep this unrelated note.\n");
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
 
-  const result = service.apply(plan);
+  const result = await service.apply(plan);
 
   const notes = readdirSync(join(root, "extensions", "ad_hoc", "notes")).map((name) => readFileSync(join(root, "extensions", "ad_hoc", "notes", name), "utf8"));
   assert.equal(notes.filter((content) => content.includes("codex-explorer-forget:")).length, 1);
@@ -259,25 +259,25 @@ test("apply converts one of multiple linked notes and removes the other positive
   assert.equal(result.verification, "suppressed");
 });
 
-test("apply rejects unconfirmed, manipulated, duplicate-tombstone, and unsafe plans", () => {
+test("apply rejects unconfirmed, manipulated, duplicate-tombstone, and unsafe plans", async () => {
   const ambiguous = fixture({ ambiguous: true });
   const ambiguousService = new MemoryForgetService(ambiguous.root, join(ambiguous.base, "backups"));
   const unconfirmed = ambiguousService.preview(selection(ambiguous.root));
-  assert.throws(() => ambiguousService.apply(unconfirmed), /not confirmed/);
+  await assert.rejects(async () => await ambiguousService.apply(unconfirmed), /not confirmed/);
 
   const exact = fixture({ adHoc: false });
   const service = new MemoryForgetService(exact.root, join(exact.base, "backups"));
   const plan = service.preview(selection(exact.root));
-  assert.throws(() => service.apply({ ...plan, fingerprint: "0".repeat(64) }), { name: "MemoryConflictError" });
+  await assert.rejects(async () => await service.apply({ ...plan, fingerprint: "0".repeat(64) }), { name: "MemoryConflictError" });
   assert.throws(() => new MemoryForgetService(exact.root, exact.root), /outside/);
   assert.throws(() => new MemoryForgetService(exact.root, join(exact.root, "backups")), /outside/);
 
   mkdirSync(join(exact.root, "extensions", "ad_hoc", "notes"), { recursive: true });
   writeFileSync(join(exact.root, "extensions", "ad_hoc", "notes", "existing.md"), `# Delete\n\n- codex-explorer-forget: sha256:${plan.fingerprint}\n`);
-  assert.throws(() => service.apply(plan), /already exists/);
+  await assert.rejects(async () => await service.apply(plan), /already exists/);
 });
 
-test("preview rejects a linked source that escapes through a symlink", () => {
+test("preview rejects a linked source that escapes through a symlink", async () => {
   const { base, root } = fixture();
   const outside = join(base, "outside.md");
   writeFileSync(outside, readFileSync(join(root, "MEMORY.md")));
@@ -289,13 +289,13 @@ test("preview rejects a linked source that escapes through a symlink", () => {
   assert.match(readFileSync(outside, "utf8"), /Keep changes simple/);
 });
 
-test("apply deletes an empty rollout source but preserves aggregate files", () => {
+test("apply deletes an empty rollout source but preserves aggregate files", async () => {
   const { base, root } = fixture();
   writeFileSync(join(root, "rollout_summaries", "one.md"), "- Keep changes simple and never add speculative features.\n");
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
 
-  service.apply(plan);
+  await service.apply(plan);
 
   assert.equal(existsSync(join(root, "rollout_summaries", "one.md")), false);
   assert.equal(existsSync(join(root, "memory_summary.md")), true);
@@ -303,22 +303,22 @@ test("apply deletes an empty rollout source but preserves aggregate files", () =
   assert.equal(existsSync(join(root, "raw_memories.md")), true);
 });
 
-test("manual recheck ignores the tombstone but detects a resurfaced positive memory", () => {
+test("manual recheck ignores the tombstone but detects a resurfaced positive memory", async () => {
   const { base, root } = fixture();
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
-  service.apply(plan);
+  await service.apply(plan);
 
   writeFileSync(join(root, "rollout_summaries", "later.md"), "# Later\n\n- Keep changes simple and never add speculative features.\n");
 
   assert.deepEqual(service.recheck(plan).resurfaced.map(({ path }) => path), ["rollout_summaries/later.md"]);
 });
 
-test("manual recheck detects a normalized-term paraphrase", () => {
+test("manual recheck detects a normalized-term paraphrase", async () => {
   const { base, root } = fixture();
   const service = new MemoryForgetService(root, join(base, "backups"));
   const plan = service.preview(selection(root));
-  service.apply(plan);
+  await service.apply(plan);
   writeFileSync(join(root, "rollout_summaries", "later.md"), "# Later\n\n- Never add speculative features; keep every change simple.\n");
 
   const recheck = service.recheck(plan);

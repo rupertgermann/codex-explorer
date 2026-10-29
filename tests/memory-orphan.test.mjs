@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { existsSync, linkSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -48,7 +49,7 @@ function confirmation(plan) {
 
 afterEach(() => roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true })));
 
-test("inspection reports every incoming Memory reference and rejects aggregate files", () => {
+test("inspection reports every incoming Memory reference and rejects aggregate files", async () => {
   const { memoryRoot, service } = fixture();
   writeFileSync(join(memoryRoot, "MEMORY.md"), [
     "# Memory",
@@ -58,35 +59,35 @@ test("inspection reports every incoming Memory reference and rejects aggregate f
     "",
   ].join("\n"));
 
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
 
   assert.equal(plan.eligible, false);
   assert.deepEqual(plan.incomingReferences.map(({ path, line }) => [path, line]), [["MEMORY.md", 3], ["MEMORY.md", 4]]);
   assert.match(plan.reason, /incoming Memory reference/i);
   linkSync(join(memoryRoot, "MEMORY.md"), join(memoryRoot, "memory-alias.md"));
   for (const corePath of ["memory_summary.md", "MEMORY.md", "raw_memories.md", "./MEMORY.md", "rollout_summaries/../MEMORY.md", "memory-alias.md"]) {
-    assert.throws(() => service.inspect(corePath), /aggregate Memory file/i);
+    await assert.rejects(async () => await service.inspect(corePath), /aggregate Memory file/i);
   }
 });
 
-test("inspection resolves relative Markdown links to the candidate", () => {
+test("inspection resolves relative Markdown links to the candidate", async () => {
   const { memoryRoot, service } = fixture();
   writeFileSync(join(memoryRoot, "rollout_summaries", "other.md"), "# Other\n\nSee [the candidate](candidate.md).\n");
 
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
 
   assert.equal(plan.eligible, false);
   assert.deepEqual(plan.incomingReferences.map(({ path, line }) => [path, line]), [["rollout_summaries/other.md", 3]]);
 });
 
-test("inspection works when an aggregate file is absent", () => {
+test("inspection works when an aggregate file is absent", async () => {
   const { memoryRoot, service } = fixture();
   rmSync(join(memoryRoot, "raw_memories.md"));
 
-  assert.equal(service.inspect("rollout_summaries/candidate.md").eligible, true);
+  assert.equal((await service.inspect("rollout_summaries/candidate.md")).eligible, true);
 });
 
-test("inspection reports linked active and archived session provenance without changing JSONL files", () => {
+test("inspection reports linked active and archived session provenance without changing JSONL files", async () => {
   const { memoryRoot, activeSessionsRoot, archivedSessionsRoot, service } = fixture();
   writeFileSync(join(memoryRoot, "rollout_summaries", "candidate.md"), [
     "# Candidate",
@@ -100,7 +101,7 @@ test("inspection reports linked active and archived session provenance without c
   const activeBefore = readFileSync(activePath);
   const archivedBefore = readFileSync(archivedPath);
 
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
 
   assert.equal(plan.eligible, false);
   assert.deepEqual(plan.sessionLinks.map(({ id, location }) => [id, location]), [
@@ -112,28 +113,28 @@ test("inspection reports linked active and archived session provenance without c
   assert.deepEqual(readFileSync(archivedPath), archivedBefore);
 });
 
-test("inspection blocks a file containing a positive Memory and directs the user to Forget", () => {
+test("inspection blocks a file containing a positive Memory and directs the user to Forget", async () => {
   const { memoryRoot, service } = fixture();
   writeFileSync(join(memoryRoot, "rollout_summaries", "candidate.md"), "# Candidate\n\n- Keep changes simple.\n");
 
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
 
   assert.equal(plan.eligible, false);
   assert.deepEqual(plan.positiveMemories.map(({ line, content }) => [line, content.trim()]), [[3, "- Keep changes simple."]]);
   assert.match(plan.reason, /Forget/);
 });
 
-test("apply backs up and deletes only an eligible confirmed orphan", () => {
+test("apply backs up and deletes only an eligible confirmed orphan", async () => {
   const { memoryRoot, activeSessionsRoot, service } = fixture();
   const candidatePath = join(memoryRoot, "rollout_summaries", "candidate.md");
   const candidateBefore = readFileSync(candidatePath);
   const sessionPath = writeSession(activeSessionsRoot, "2026/08/unlinked.jsonl", "unlinked-session");
   const sessionBefore = readFileSync(sessionPath);
   const corpusBefore = treeBytes(memoryRoot).filter(([path]) => path !== "rollout_summaries/candidate.md");
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
 
-  assert.throws(() => service.apply(plan, { path: plan.path, expectedHash: "wrong" }), /confirmation/i);
-  const result = service.apply(plan, confirmation(plan));
+  await assert.rejects(async () => await service.apply(plan, { path: plan.path, expectedHash: "wrong" }), /confirmation/i);
+  const result = await service.apply(plan, confirmation(plan));
 
   assert.equal(plan.eligible, true);
   assert.equal(existsSync(candidatePath), false);
@@ -146,22 +147,36 @@ test("apply backs up and deletes only an eligible confirmed orphan", () => {
   assert.deepEqual(readFileSync(manifest.backupPath), candidateBefore);
 });
 
-test("a stale plan leaves the Memory corpus byte-identical", () => {
+test("a stale plan leaves the Memory corpus byte-identical", async () => {
   const { memoryRoot, service } = fixture();
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
   writeFileSync(join(memoryRoot, "rollout_summaries", "candidate.md"), "# Changed concurrently\n");
   const before = treeBytes(memoryRoot);
 
-  assert.throws(() => service.apply(plan, confirmation(plan)), { name: MemoryConflictError.name });
+  await assert.rejects(async () => await service.apply(plan, confirmation(plan)), { name: MemoryConflictError.name });
   assert.deepEqual(treeBytes(memoryRoot), before);
 });
 
-test("a backup failure leaves the Memory corpus byte-identical", () => {
+test("a backup failure leaves the Memory corpus byte-identical", async () => {
   const { memoryRoot, backupRoot, service } = fixture();
   writeFileSync(backupRoot, "not a directory");
-  const plan = service.inspect("rollout_summaries/candidate.md");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
   const before = treeBytes(memoryRoot);
 
-  assert.throws(() => service.apply(plan, confirmation(plan)));
+  await assert.rejects(async () => await service.apply(plan, confirmation(plan)));
   assert.deepEqual(treeBytes(memoryRoot), before);
+});
+
+
+test("orphan inspection resolves old plain rollout references to compressed active and archived sessions", async () => {
+  const { memoryRoot, activeSessionsRoot, archivedSessionsRoot, service } = fixture();
+  for (const [root, name] of [[activeSessionsRoot, "active"], [archivedSessionsRoot, "archived"]]) {
+    const path = writeSession(root, `${name}.jsonl`, name);
+    writeFileSync(`${path}.zst`, zstdCompressSync(readFileSync(path)));
+    rmSync(path);
+  }
+  writeFileSync(join(memoryRoot, "rollout_summaries/candidate.md"), "# Candidate\nSources: active.jsonl and archived.jsonl\n");
+  const plan = await service.inspect("rollout_summaries/candidate.md");
+  assert.equal(plan.eligible, false);
+  assert.deepEqual(plan.sessionLinks.map(s => s.path), ["active.jsonl.zst", "archived.jsonl.zst"]);
 });

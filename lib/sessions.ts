@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
 import { createReadStream, existsSync, lstatSync, openSync, closeSync, readSync, readdirSync, statSync } from "node:fs";
+import { StringDecoder } from "node:string_decoder";
+import { createZstdDecompress } from "node:zlib";
 import { homedir } from "node:os";
-import { basename, extname, join, relative, resolve, sep } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 export type SessionProvenance = "user" | "codex" | "automation" | "unknown";
 
@@ -133,29 +135,47 @@ function timestamp(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export const sessionFileKey = (path: string) => path.replace(/\.zst$/i, "");
+const isSessionFile = (path: string) => /\.jsonl(?:\.zst)?$/i.test(path);
+
+async function* sessionStream(path: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const source = createReadStream(path, { highWaterMark: 64 * 1024, signal });
+  if (!path.endsWith(".zst")) { yield* source; return; }
+  const decoder = createZstdDecompress();
+  source.on("error", error => decoder.destroy(error));
+  source.pipe(decoder);
+  try { yield* decoder; }
+  finally {
+    source.destroy();
+    decoder.destroy();
+  }
+}
+
 function sessionPaths(root: string, directory = root): string[] {
   if (!existsSync(directory)) return [];
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) return sessionPaths(root, path);
-    if (!entry.isFile() || extname(entry.name).toLowerCase() !== ".jsonl") return [];
+    if (!entry.isFile() || !isSessionFile(entry.name)) return [];
+    if (entry.name.endsWith(".zst") && existsSync(path.slice(0, -4))) return [];
     return [relative(root, path)];
   });
 }
 
-function firstRecord(path: string): JsonRecord | null {
-  const descriptor = openSync(path, "r");
-  try {
-    const buffer = Buffer.alloc(128 * 1024);
-    const bytes = readSync(descriptor, buffer, 0, buffer.length, 0);
-    const newline = buffer.subarray(0, bytes).indexOf(10);
-    const line = buffer.subarray(0, newline >= 0 ? newline : bytes).toString("utf8");
-    return JSON.parse(line) as JsonRecord;
-  } catch {
-    return null;
-  } finally {
-    closeSync(descriptor);
+async function firstRecord(path: string): Promise<JsonRecord | null> {
+  const parts: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of sessionStream(path)) {
+    const buffer = Buffer.from(chunk);
+    const newline = buffer.indexOf(10);
+    const part = buffer.subarray(0, Math.min(newline < 0 ? buffer.length : newline, 128 * 1024 - bytes));
+    parts.push(part);
+    bytes += part.length;
+    if (newline >= 0 || bytes >= 128 * 1024) break;
   }
+  try { return JSON.parse(Buffer.concat(parts).toString("utf8")) as JsonRecord; }
+  catch { return null; }
 }
 
 function projectName(cwd: string) {
@@ -172,15 +192,15 @@ function sessionProvenance(payload: Record<string, unknown>): SessionProvenance 
   return "unknown";
 }
 
-function summary(root: string, path: string): SessionSummary {
+async function summary(root: string, path: string): Promise<SessionSummary> {
   const absolutePath = join(root, path);
   const file = statSync(absolutePath);
-  const record = firstRecord(absolutePath);
+  const record = await firstRecord(absolutePath);
   const payload = record?.type === "session_meta" ? object(record.payload) : {};
   const cwd = string(payload.cwd);
   const parentThreadId = string(payload.parent_thread_id);
   return {
-    id: string(payload.id) || basename(path, ".jsonl"),
+    id: string(payload.id) || basename(sessionFileKey(path), ".jsonl"),
     path,
     filename: basename(path),
     startedAt: timestamp(record?.timestamp ?? payload.timestamp, file.birthtimeMs || file.mtimeMs),
@@ -212,10 +232,12 @@ export async function scanJsonl(
   path: string,
   byteLimit: number,
   visit: (record: JsonRecord, line: number) => void,
-  options: { signal?: AbortSignal; onProgress?: (scannedBytes: number, totalBytes: number) => void } = {},
+  options: { signal?: AbortSignal; onProgress?: (scannedBytes: number, totalBytes: number) => void; maxRecordBytes?: number } = {},
 ) {
   const fileSize = statSync(path).size;
-  const stream = createReadStream(path, { highWaterMark: 64 * 1024 });
+  const stream = sessionStream(path, options.signal);
+  const totalBytes = path.endsWith(".zst") ? 0 : fileSize;
+  let scanLimitReached = false;
   let fragments: Buffer[] = [];
   let lineBytes = 0;
   let oversized = false;
@@ -227,7 +249,7 @@ export async function scanJsonl(
 
   const append = (fragment: Buffer) => {
     if (oversized || fragment.length === 0) return;
-    if (lineBytes + fragment.length > LINE_SIZE_LIMIT) {
+    if (lineBytes + fragment.length > (options.maxRecordBytes ?? LINE_SIZE_LIMIT)) {
       fragments = [];
       lineBytes = 0;
       oversized = true;
@@ -257,12 +279,11 @@ export async function scanJsonl(
     if (options.signal?.aborted) throw new DOMException("Session scan cancelled.", "AbortError");
     const chunk = Buffer.isBuffer(rawChunk) ? rawChunk : Buffer.from(rawChunk);
     const remaining = byteLimit - scannedBytes;
-    if (remaining <= 0) break;
+    if (remaining <= 0) { scanLimitReached = true; break; }
     const usable = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
     scannedBytes += usable.length;
     let start = 0;
-    for (let index = 0; index < usable.length; index += 1) {
-      if (usable[index] !== 10) continue;
+    for (let index = usable.indexOf(10); index >= 0; index = usable.indexOf(10, start)) {
       append(usable.subarray(start, index));
       finishLine();
       start = index + 1;
@@ -270,16 +291,15 @@ export async function scanJsonl(
     append(usable.subarray(start));
     if (scannedBytes - lastProgress >= PROGRESS_INTERVAL) {
       lastProgress = scannedBytes;
-      options.onProgress?.(scannedBytes, fileSize);
+      options.onProgress?.(scannedBytes, totalBytes);
     }
-    if (usable.length < chunk.length || scannedBytes >= byteLimit) break;
+    if (usable.length < chunk.length) { scanLimitReached = true; break; }
   }
 
-  const scanLimitReached = scannedBytes < fileSize;
   if (!scanLimitReached) {
     finishLine();
   }
-  options.onProgress?.(scannedBytes, fileSize);
+  options.onProgress?.(scannedBytes, scanLimitReached ? totalBytes : scannedBytes);
   return {
     scannedBytes,
     oversizedRecords,
@@ -339,6 +359,30 @@ function sessionSearchMatch(rawLine: string, line: number, query: string): Sessi
   }
   const readable = rawLine.replaceAll("\\n", " ").replaceAll('\\"', '"').replace(/[{}[\]]/g, " ");
   return { line, kind: "raw", excerpt: searchExcerpt(readable, query) };
+}
+
+async function compressedMatches(path: string, query: string, signal: AbortSignal) {
+  const matches: SessionSearchMatch[] = [], decoder = new StringDecoder("utf8");
+  const needle = query.toLocaleLowerCase();
+  let line = 1, tail = "", excerpt = "";
+  const accept = (fragment: string, endOfLine: boolean) => {
+    const text = tail + fragment, index = text.toLocaleLowerCase().indexOf(needle);
+    if (!excerpt && index >= 0) excerpt = text.length <= 1024 ? text : text.slice(Math.max(0, index - 120), index + query.length + 160);
+    tail = text.slice(-(query.length + 120));
+    if (endOfLine) {
+      if (excerpt) matches.push(sessionSearchMatch(excerpt, line, query));
+      line++; tail = ""; excerpt = "";
+    }
+  };
+  for await (const chunk of sessionStream(path, signal)) {
+    const parts = decoder.write(chunk).split("\n");
+    for (let i = 0; i < parts.length; i++) {
+      accept(parts[i], i < parts.length - 1);
+      if (matches.length >= 3) return matches;
+    }
+  }
+  accept(decoder.end(), true);
+  return matches;
 }
 
 function ripgrepMatches(root: string, query: string): Promise<Map<string, SessionSearchMatch[]>> {
@@ -416,13 +460,13 @@ export class SessionRepository {
     this.root = resolve(root);
   }
 
-  catalog(options: { refresh?: boolean } = {}): SessionCatalog {
+  async catalog(options: { refresh?: boolean } = {}): Promise<SessionCatalog> {
     const cached = sessionCatalogCache.get(this.root);
     if (cached && !options.refresh) return cached;
 
-    const sessions = sessionPaths(this.root)
-      .map((path) => summary(this.root, path))
-      .sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path));
+    const sessions: SessionSummary[] = [];
+    for (const path of sessionPaths(this.root)) sessions.push(await summary(this.root, path));
+    sessions.sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path));
     const projects = new Map<string, { sessions: number; bytes: number }>();
     const months = new Map<string, { sessions: number; bytes: number }>();
     sessions.forEach((session) => {
@@ -457,19 +501,31 @@ export class SessionRepository {
   async search(query: string): Promise<SessionSearchResult[]> {
     const needle = query.trim();
     if (!needle) return [];
+    const signal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
     const matches = await ripgrepMatches(this.root, needle);
+    try {
+      let compressedCount = 0;
+      for (const path of sessionPaths(this.root).filter(p => p.endsWith(".zst")).sort().reverse()) {
+        const selected = await compressedMatches(join(this.root, path), needle, signal);
+        if (selected.length) { matches.set(join(this.root, path), selected); compressedCount++; }
+        if (compressedCount >= 100) break;
+      }
+    } catch (error) {
+      if (signal.aborted) throw new SessionSearchError("Session search exceeded 20 seconds. Try a more specific phrase.");
+      throw error;
+    }
     const priority: Record<SessionSearchMatch["kind"], number> = { user: 0, assistant: 1, tool: 2, metadata: 3, raw: 4 };
-    return [...matches.entries()]
-      .map(([absolutePath, context]) => ({
-        ...summary(this.root, relative(this.root, absolutePath)),
-        matches: context.sort((left, right) => priority[left.kind] - priority[right.kind] || left.line - right.line),
-      }))
-      .sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path))
-      .slice(0, 100);
+    const results: SessionSearchResult[] = [];
+    for (const [absolutePath, context] of matches) results.push({
+      ...await summary(this.root, relative(this.root, absolutePath)),
+      matches: context.sort((left, right) => priority[left.kind] - priority[right.kind] || left.line - right.line),
+    });
+    return results.sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path)).slice(0, 100);
   }
 
-  rawPage(path: string, options: { offset?: number; byteLimit?: number } = {}): RawSessionPage {
+  async rawPage(path: string, options: { offset?: number; byteLimit?: number; signal?: AbortSignal } = {}): Promise<RawSessionPage> {
     const absolutePath = this.resolveSessionPath(path);
+    if (absolutePath.endsWith(".zst")) return this.compressedRawPage(absolutePath, options);
     const fileSize = statSync(absolutePath).size;
     const byteLimit = Math.min(512 * 1024, Math.max(64, Math.floor(options.byteLimit ?? 256 * 1024)));
     let offset = Math.min(fileSize, Math.max(0, Math.floor(options.offset ?? 0)));
@@ -511,6 +567,30 @@ export class SessionRepository {
     };
   }
 
+  private async compressedRawPage(absolutePath: string, options: { offset?: number; byteLimit?: number; signal?: AbortSignal }): Promise<RawSessionPage> {
+    const byteLimit = Math.min(512 * 1024, Math.max(64, Math.floor(options.byteLimit ?? 256 * 1024)));
+    let offset = Math.max(0, Math.floor(options.offset ?? 0));
+    const start = Math.max(0, offset - 1), end = offset + byteLimit + 4;
+    const parts: Buffer[] = [];
+    let fileSize = 0;
+    for await (const chunk of sessionStream(absolutePath, options.signal)) {
+      const buffer = Buffer.from(chunk), next = fileSize + buffer.length;
+      if (next > start && fileSize < end) parts.push(buffer.subarray(Math.max(0, start - fileSize), Math.min(buffer.length, end - fileSize)));
+      fileSize = next;
+    }
+    const buffer = Buffer.concat(parts);
+    offset = Math.min(offset, fileSize);
+    let local = offset > 0 && buffer.length ? 1 : 0;
+    while (local < buffer.length && (buffer[local] & 0xc0) === 0x80) { local++; offset++; }
+    const bytes = completeUtf8PrefixLength(buffer.subarray(local), Math.min(byteLimit, buffer.length - local));
+    const nextOffset = offset + bytes < fileSize ? offset + bytes : null;
+    return { path: relative(this.root, absolutePath), offset, bytes, byteLimit, fileSize,
+      previousOffset: offset > 0 ? Math.max(0, offset - byteLimit) : null, nextOffset,
+      startsMidLine: offset > 0 && local > 0 && buffer[local - 1] !== 10,
+      endsMidLine: nextOffset !== null && bytes > 0 && buffer[local + bytes - 1] !== 10,
+      text: buffer.subarray(local, local + bytes).toString("utf8") };
+  }
+
   async read(path: string): Promise<SessionDetail> {
     return this.inspect(path, DETAIL_SCAN_LIMIT, ENTRY_LIMIT);
   }
@@ -527,8 +607,7 @@ export class SessionRepository {
     signal?: AbortSignal,
   ): Promise<SessionDetail> {
     const absolutePath = this.resolveSessionPath(path);
-    const base = summary(this.root, relative(this.root, absolutePath));
-    const fileSize = statSync(absolutePath).size;
+    const base = await summary(this.root, relative(this.root, absolutePath));
     const entries: SessionEntry[] = [];
     const eventTypes = new Map<string, number>();
     let model = "unknown";
@@ -558,7 +637,7 @@ export class SessionRepository {
       return identified;
     };
 
-    const scan = await scanJsonl(absolutePath, Math.min(fileSize, byteLimit), (record) => {
+    const scan = await scanJsonl(absolutePath, byteLimit, (record) => {
       events += 1;
       const recordType = string(record.type) || "unknown";
       const payload = object(record.payload);
@@ -639,9 +718,9 @@ export class SessionRepository {
     };
   }
 
-  private resolveSessionPath(path: string) {
+  resolveSessionPath(path: string) {
     const absolutePath = resolve(this.root, path);
-    if (!absolutePath.startsWith(`${this.root}${sep}`) || extname(absolutePath).toLowerCase() !== ".jsonl") throw new SessionPathError();
+    if (!absolutePath.startsWith(`${this.root}${sep}`) || !isSessionFile(absolutePath)) throw new SessionPathError();
     if (!existsSync(absolutePath) || !lstatSync(absolutePath).isFile()) throw new SessionPathError("The requested session file does not exist.");
     return absolutePath;
   }

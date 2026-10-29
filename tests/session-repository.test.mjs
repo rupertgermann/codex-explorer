@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
@@ -23,7 +25,7 @@ afterEach(() => {
   roots.splice(0).forEach((root) => rmSync(root, { recursive: true, force: true }));
 });
 
-test("catalogs JSONL sessions from metadata without treating other files as sessions", () => {
+test("catalogs JSONL sessions from metadata without treating other files as sessions", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/24/rollout-one.jsonl", [
     { timestamp: "2026-08-24T10:00:00.000Z", type: "session_meta", payload: { id: "session-one", cwd: "/work/alpha", source: "vscode", originator: "codex" } },
@@ -34,7 +36,7 @@ test("catalogs JSONL sessions from metadata without treating other files as sess
   ]);
   writeFileSync(join(root, "ignored.txt"), "not a session");
 
-  const catalog = new SessionRepository(root).catalog();
+  const catalog = await new SessionRepository(root).catalog();
 
   assert.equal(catalog.totals.sessions, 2);
   assert.equal(catalog.totals.projects, 2);
@@ -44,19 +46,19 @@ test("catalogs JSONL sessions from metadata without treating other files as sess
   assert.deepEqual(catalog.months, [{ month: "2026-08", sessions: 2, bytes: catalog.totals.bytes }]);
 });
 
-test("reuses the session catalog until an explicit refresh", () => {
+test("reuses the session catalog until an explicit refresh", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/first.jsonl", [
     { type: "session_meta", payload: { id: "first", cwd: "/work/alpha" } },
   ]);
   const repository = new SessionRepository(root);
 
-  const first = repository.catalog();
+  const first = await repository.catalog();
   writeSession(root, "2026/08/second.jsonl", [
     { type: "session_meta", payload: { id: "second", cwd: "/work/beta" } },
   ]);
-  const cached = new SessionRepository(root).catalog();
-  const refreshed = repository.catalog({ refresh: true });
+  const cached = await new SessionRepository(root).catalog();
+  const refreshed = await repository.catalog({ refresh: true });
 
   assert.strictEqual(cached, first);
   assert.deepEqual(cached.sessions.map((session) => session.id), ["first"]);
@@ -64,7 +66,7 @@ test("reuses the session catalog until an explicit refresh", () => {
   assert.ok(refreshed.indexedAt >= first.indexedAt);
 });
 
-test("classifies user, Codex, automation, and legacy session provenance", () => {
+test("classifies user, Codex, automation, and legacy session provenance", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/user.jsonl", [
     { type: "session_meta", payload: { id: "user", thread_source: "user", source: "vscode" } },
@@ -82,7 +84,7 @@ test("classifies user, Codex, automation, and legacy session provenance", () => 
     { type: "session_meta", payload: { id: "unknown", source: "vscode" } },
   ]);
 
-  const sessions = new SessionRepository(root).catalog().sessions;
+  const sessions = (await new SessionRepository(root).catalog()).sessions;
   const provenance = Object.fromEntries(sessions.map((session) => [session.id, [session.provenance, session.parentThreadId]]));
 
   assert.deepEqual(provenance, {
@@ -250,7 +252,7 @@ test("caps broad session searches at the newest 100 files", async () => {
   assert.equal(results.at(-1).id, "session-1");
 });
 
-test("reads raw JSONL content in bounded byte pages", () => {
+test("reads raw JSONL content in bounded byte pages", async () => {
   const root = sessionRoot();
   writeSession(root, "2026/08/raw.jsonl", [
     { timestamp: "2026-08-24T10:00:00.000Z", type: "session_meta", payload: { id: "raw" } },
@@ -258,8 +260,8 @@ test("reads raw JSONL content in bounded byte pages", () => {
   ]);
   const repository = new SessionRepository(root);
 
-  const first = repository.rawPage("2026/08/raw.jsonl", { offset: 0, byteLimit: 80 });
-  const second = repository.rawPage("2026/08/raw.jsonl", { offset: first.nextOffset, byteLimit: 80 });
+  const first = await repository.rawPage("2026/08/raw.jsonl", { offset: 0, byteLimit: 80 });
+  const second = await repository.rawPage("2026/08/raw.jsonl", { offset: first.nextOffset, byteLimit: 80 });
 
   assert.equal(first.offset, 0);
   assert.equal(first.bytes, 80);
@@ -273,7 +275,7 @@ test("reads raw JSONL content in bounded byte pages", () => {
   assert.equal(Buffer.byteLength(first.text) + Buffer.byteLength(second.text) <= second.fileSize, true);
 });
 
-test("raw byte pages do not split UTF-8 characters", () => {
+test("raw byte pages do not split UTF-8 characters", async () => {
   const root = sessionRoot();
   const relativePath = "2026/08/unicode.jsonl";
   const path = join(root, relativePath);
@@ -281,8 +283,8 @@ test("raw byte pages do not split UTF-8 characters", () => {
   writeFileSync(path, `${"a".repeat(63)}😀${"b".repeat(80)}`);
   const repository = new SessionRepository(root);
 
-  const first = repository.rawPage(relativePath, { byteLimit: 64 });
-  const second = repository.rawPage(relativePath, { offset: first.nextOffset, byteLimit: 64 });
+  const first = await repository.rawPage(relativePath, { byteLimit: 64 });
+  const second = await repository.rawPage(relativePath, { offset: first.nextOffset, byteLimit: 64 });
 
   assert.equal(first.bytes, 63);
   assert.equal(first.text, "a".repeat(63));
@@ -341,4 +343,65 @@ test("full scans continue past the preview entry limit even for small files", as
   const complete = await repository.scanFull(path);
   assert.equal(complete.truncation.entryLimitReached, false);
   assert.equal(complete.entries.length, 1_502);
+});
+
+
+test("compressed sessions share catalog, transcript, search and decoded raw paging without duplicate plain copies", async () => {
+  const root = sessionRoot(), path = "2026/10/compressed.jsonl.zst";
+  const rows = [
+    { timestamp: "2026-10-01T00:00:00Z", type: "session_meta", payload: { id: "compressed", cwd: "/work/compressed", thread_source: "subagent", parent_thread_id: "parent" } },
+    { timestamp: "2026-10-01T00:00:01Z", type: "event_msg", payload: { type: "user_message", message: "Compressed needle 😀 " + "x".repeat(200) } },
+    { timestamp: "2026-10-01T00:00:02Z", type: "event_msg", payload: { type: "agent_message", message: "Compressed answer" } },
+  ];
+  writeSession(root, path, rows);
+  const content = readFileSync(join(root, path));
+  writeFileSync(join(root, path), zstdCompressSync(content));
+  writeSession(root, "copy.jsonl", [{ type: "session_meta", payload: { id: "plain" } }]);
+  writeFileSync(join(root, "copy.jsonl.zst"), zstdCompressSync(Buffer.from(JSON.stringify(rows[0]))));
+  const repository = new SessionRepository(root);
+  const catalog = await repository.catalog();
+  assert.deepEqual(catalog.sessions.map(s => s.id).sort(), ["compressed", "plain"]);
+  assert.equal(catalog.sessions.find(s => s.id === "compressed").parentThreadId, "parent");
+  assert.equal(catalog.sessions.find(s => s.id === "compressed").project, "compressed");
+  const preview = await repository.read(path), complete = await repository.scanFull(path);
+  assert.deepEqual(complete.entries, preview.entries);
+  assert.equal(complete.metrics.scannedBytes, content.length);
+  assert.equal(complete.truncation.scanLimitReached, false);
+  assert.equal((await repository.search("Compressed needle"))[0].path, path);
+  assert.equal((await repository.search("Compressed needle"))[0].matches[0].kind, "user");
+  let actual = "", offset = 0;
+  do {
+    const page = await repository.rawPage(path, { offset, byteLimit: 64 });
+    assert.equal(page.fileSize, content.length);
+    assert.ok(page.bytes <= 64);
+    actual += page.text;
+    offset = page.nextOffset;
+  } while (offset !== null);
+  assert.equal(actual, content.toString());
+  const empty = await repository.rawPage(path, { offset: content.length + 100 });
+  assert.equal(empty.offset, content.length);
+  assert.equal(empty.text, "");
+  await assert.rejects(repository.scanFull(path, undefined, AbortSignal.abort()), { name: "AbortError" });
+});
+
+test("compressed preview limits apply to decoded bytes and full scans continue to the last record", async () => {
+  const root = sessionRoot(), path = "large.jsonl.zst";
+  const content = Buffer.from([
+    JSON.stringify({ type: "session_meta", payload: { id: "large" } }),
+    JSON.stringify({ type: "response_item", payload: { output: randomBytes(17 * 1024 * 1024).toString("hex") } }),
+    JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "After compressed preview" } }),
+  ].join("\n") + "\n");
+  writeFileSync(join(root, path), zstdCompressSync(content));
+  const repository = new SessionRepository(root), preview = await repository.read(path);
+  assert.equal(preview.truncation.scanLimitReached, true);
+  assert.equal(preview.entries.length, 0);
+  const full = await repository.scanFull(path);
+  assert.equal(full.entries[0].text, "After compressed preview");
+  assert.equal(full.metrics.scannedBytes, content.length);
+  assert.equal(full.truncation.scanLimitReached, false);
+  assert.equal((await repository.search("After compressed preview"))[0].path, path);
+  writeFileSync(join(root, "malformed.jsonl.zst"), zstdCompressSync(Buffer.from("not-json " + "x".repeat(3 * 1024 * 1024) + " oversized needle\n")));
+  assert.equal((await repository.search("oversized needle"))[0].path, "malformed.jsonl.zst");
+  writeFileSync(join(root, "corrupt.jsonl.zst"), "not zstd");
+  await assert.rejects(repository.read("corrupt.jsonl.zst"));
 });

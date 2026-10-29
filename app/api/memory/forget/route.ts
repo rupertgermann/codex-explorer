@@ -73,7 +73,7 @@ export async function POST(request: Request) {
     if (body.action === "preview") {
       if (isRecord(body.selection) && body.selection.kind === "project") {
         if (typeof body.selection.directory !== "string") throw new Error("A project directory is required.");
-        return NextResponse.json(service.previewProject({ kind: "project", directory: body.selection.directory }), { headers: { "Cache-Control": "no-store" } });
+        return NextResponse.json(await service.previewProject({ kind: "project", directory: body.selection.directory }), { headers: { "Cache-Control": "no-store" } });
       }
       if (!isSelection(body.selection)) throw new Error("A valid summary selection is required.");
       return NextResponse.json(service.preview(body.selection), { headers: { "Cache-Control": "no-store" } });
@@ -82,10 +82,10 @@ export async function POST(request: Request) {
       if (isRecord(body.plan) && body.plan.kind === "project") {
         if (!isProjectPlan(body.plan)) throw new Error("A valid Project Forget plan is required.");
         if (typeof body.confirmedDirectory !== "string") throw new Error("Confirm the exact project directory before applying its Forget plan.");
-        return NextResponse.json(service.apply(body.plan, body.confirmedDirectory), { headers: { "Cache-Control": "no-store" } });
+        return NextResponse.json(await service.apply(body.plan, body.confirmedDirectory), { headers: { "Cache-Control": "no-store" } });
       }
       if (!isPlan(body.plan)) throw new Error("A valid confirmed Forget plan is required.");
-      return NextResponse.json(service.apply(body.plan), { headers: { "Cache-Control": "no-store" } });
+      return NextResponse.json(await service.apply(body.plan), { headers: { "Cache-Control": "no-store" } });
     }
     if (body.action === "recheck") {
       if (!isPlan(body.plan)) throw new Error("A valid Forget plan is required.");

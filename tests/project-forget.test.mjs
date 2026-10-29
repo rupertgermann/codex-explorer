@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -267,4 +268,20 @@ test("Project Apply includes committed WAL payloads and supports database-only M
       if (databaseOnly) assert.equal(existsSync(join(source.root, "MEMORY.md")), false);
     } finally { live.close(); }
   }
+});
+
+
+test("Project Forget API resolves compressed active and archived provenance without modifying sessions", async () => {
+  const source = fixture();
+  const expected = await preview(source);
+  for (const [root, id] of [["sessions", "app"], ["archived_sessions", "app-ui"]]) {
+    const path = join(source.home, root, `${id}.jsonl`);
+    writeFileSync(`${path}.zst`, zstdCompressSync(readFileSync(path)));
+    rmSync(path);
+  }
+  const before = projectBytes(source.home), actual = await preview(source);
+  assert.deepEqual(actual.matchedSessionIds, expected.matchedSessionIds);
+  assert.deepEqual(actual.database.rows, expected.database.rows);
+  assert.equal(actual.actionable, true, actual.reason);
+  assert.deepEqual(projectBytes(source.home), before);
 });

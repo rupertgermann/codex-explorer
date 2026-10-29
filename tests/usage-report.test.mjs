@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { zstdCompressSync } from "node:zlib";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -125,4 +126,205 @@ test("time selection, DST days, empty reports and CSV preserve observable values
     assert.equal(report.hourly.length, 25);
     assert.equal(report.daily[0].series[dimensionKey(dims)], 10);
   } finally { if (savedTZ === undefined) delete process.env.TZ; else process.env.TZ = savedTZ; }
+});
+
+
+test("usage counts compressed live and archived sessions once, preferring plain and then active copies", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-zstd-"));
+  const write = (root, path, id, total) => {
+    mkdirSync(join(home, root), { recursive: true });
+    const content = Buffer.from([record(0, "session_meta", { id }), context(1, "turn", "model", "high"), count(10, total), count(11, total)].map(r => JSON.stringify(r)).join("\n"));
+    writeFileSync(join(home, root, path), path.endsWith(".zst") ? zstdCompressSync(content) : content);
+  };
+  try {
+    write("sessions", "copy.jsonl", "main", 100);
+    write("sessions", "copy.jsonl.zst", "main", 9999);
+    write("archived_sessions", "copy.jsonl.zst", "main", 9999);
+    write("sessions", "compressed.jsonl.zst", "child", 50);
+    write("archived_sessions", "archived.jsonl.zst", "archived", 40);
+    const data = await readUsageData(epoch, epoch + 100, { home });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 190);
+    assert.equal(data.events.length, 3);
+    assert.equal(data.sessions.length, 3);
+    assert.equal(data.coverage.invalidUsage, 0);
+    await assert.rejects(readUsageData(epoch, epoch + 100, { home, signal: AbortSignal.abort() }), { name: "AbortError" });
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test("the first snapshot of a compressed fork counts its last request rather than inherited lifetime usage", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-inherited-"));
+  try {
+    const first = count(10, 1000);
+    first.payload.info.last_token_usage = { input_tokens: 90, output_tokens: 10, total_tokens: 100 };
+    const parent = count(5, 900);
+    parent.payload.info.last_token_usage = { input_tokens: 90, output_tokens: 10, total_tokens: 100 };
+    writeFileSync(join(home, "parent.jsonl"), [record(0, "session_meta", { id: "parent" }), parent].map(r => JSON.stringify(r)).join("\n"));
+    const rows = [record(0, "session_meta", { id: "child", forked_from_id: "parent" }),
+      event(1, "task_started", { turn_id: "own" }), context(2, "own", "model", "high"), first, { ...first, timestamp: at(11) }, count(20, 1050)];
+    writeFileSync(join(home, "child.jsonl.zst"), zstdCompressSync(Buffer.from(rows.map(r => JSON.stringify(r)).join("\n"))));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.deepEqual(data.events.filter(e => e.sessionId === "child").map(e => e.usage.total_tokens), [100, 50]);
+    assert.equal(buildUsageReport(data).summary.total_tokens, 1050);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("quota activity stays correct across nonchronological cycles, touching boundaries and equal timestamps", () => {
+  const dims = { model: "model", effort: "high", speed: "normal" };
+  const interval = (sessionId, start, end) => ({ ...dims, sessionId, start, end, partial: false });
+  const snapshot = (sessionId, t, usedPercent, resetsAt) => ({ ...dims, sessionId, t, usedPercent, resetsAt,
+    limitId: "codex", windowMinutes: 10080, source: sessionId, line: t, reliable: true });
+  const data = { events: [], intervals: [interval("b", 1000, 1500), interval("a", 100, 250),
+    interval("touch-left", 0, 100), interval("touch-right", 200, 300)], snapshots: [
+    snapshot("b", 1000, 10, 10000), snapshot("b", 1100, 11, 10000), snapshot("b", 1200, 12, 10000),
+    snapshot("a", 100, 20, 20000), snapshot("a", 100, 20, 20000), snapshot("a", 150, 21, 20000), snapshot("a", 200, 22, 20000),
+  ] };
+  const before = [...data.intervals];
+  const result = analyzeQuota(data, "codex/10080", 0);
+  assert.deepEqual(result.selected.map(w => [w.sessionId, w.start, w.end, w.observedPp]), [["b", 1000, 1200, 2], ["a", 100, 200, 2]]);
+  assert.ok(result.windows.some(w => w.category === "same_timestamp"));
+  assert.deepEqual(data.intervals, before);
+});
+
+const usageRecord = (t, responseId, usage, extra = {}) => record(t, "token_usage_record", { response_id: responseId, usage, ...extra });
+const compacted = (responseId, t) => t === undefined ? { type: "compacted", payload: { compaction_response_id: responseId } } : record(t, "compacted", { compaction_response_id: responseId });
+
+test("compaction requests use their own timestamp and model, count once, and do not change cumulative baselines", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-compact-"));
+  try {
+    const rows = [record(0, "session_meta", { id: "main" }), context(1, "turn", "normal-model", "high"), count(2, 100),
+      usageRecord(3, "remote", { input_tokens: 300, output_tokens: 30, cached_input_tokens: 200 }, { model: "compact-model" }),
+      compacted("remote", 4), compacted("remote", 5), usageRecord(6, "remote", { input_tokens: 999, output_tokens: 1 }),
+      usageRecord(7, "unrelated", { input_tokens: 999, output_tokens: 1 }), count(8, 150),
+      compacted("reverse"), usageRecord(9, "reverse", { input_tokens: 200, output_tokens: 20 }),
+      usageRecord(99, "across-end", { input_tokens: 10, output_tokens: 2 }), compacted("across-end", 101),
+      usageRecord(100, "outside", { input_tokens: 999, output_tokens: 1 }), compacted("outside", 101)];
+    writeFileSync(join(home, "main.jsonl.zst"), zstdCompressSync(Buffer.from(rows.map(r => JSON.stringify(r)).join("\n"))));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    const report = buildUsageReport(data);
+    assert.equal(report.summary.total_tokens, 712);
+    assert.equal(report.summary.cached_input_tokens, 200);
+    assert.equal(buildUsageReport(data, { model: "compact-model" }).summary.total_tokens, 330);
+    assert.equal(buildUsageReport(data, { model: "normal-model" }).summary.total_tokens, 382);
+    assert.deepEqual(data.events.filter(e => e.responseId).map(e => [e.responseId, e.t - epoch]), [["remote", 3], ["reverse", 9], ["across-end", 99]]);
+    assert.ok(data.events.every(e => e.source.endsWith(".zst") && e.line > 1));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("compaction usage already covered by counters is not added, including a first snapshot with thread totals", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-compact-counted-"));
+  try {
+    const u = (input_tokens, output_tokens) => ({ input_tokens, output_tokens, total_tokens: input_tokens + output_tokens });
+    const token = (t, usage) => event(t, "token_count", { info: { total_token_usage: usage } });
+    const rows = [record(0, "session_meta", { id: "main" }), token(1, u(100, 20)),
+      usageRecord(2, "local", u(300, 30)), token(3, u(400, 50)), compacted("local", 4), token(5, u(450, 60))];
+    writeFileSync(join(home, "main.jsonl"), rows.map(r => JSON.stringify(r)).join("\n"));
+    const first = [record(0, "session_meta", { id: "first" }), usageRecord(1, "thread-total", u(300, 30), { thread_token_usage: u(400, 50) }), token(2, u(400, 50)), compacted("thread-total")];
+    writeFileSync(join(home, "first.jsonl"), first.map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 960);
+    assert.equal(data.events.filter(e => e.responseId).length, 0);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("compaction response IDs deduplicate timestamp-rewritten copies and retain the original reporting period", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-compact-copy-"));
+  try {
+    const write = (path, id, t) => writeFileSync(join(home, path), [record(0, "session_meta", { id }),
+      usageRecord(t, "same-response", { input_tokens: 90, output_tokens: 10 }), compacted("same-response")].map(r => JSON.stringify(r)).join("\n"));
+    write("a-copy.jsonl", "copy", 110); write("z-original.jsonl", "original", 10);
+    const whole = await readUsageData(epoch, epoch + 200, { home, roots: [home] });
+    assert.equal(buildUsageReport(whole).summary.total_tokens, 100);
+    assert.equal(whole.events[0].sessionId, "original");
+    const later = await readUsageData(epoch + 100, epoch + 200, { home, roots: [home] });
+    assert.equal(buildUsageReport(later).summary.total_tokens, 0);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("compaction markers above the transcript record cap are included structurally and can precede covered counters", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-big-compact-"));
+  try {
+    const marker = compacted("remote", 4);
+    marker.payload.replacement_history = "x".repeat(3 * 1024 * 1024);
+    const rows = [record(0, "session_meta", { id: "main" }), count(1, 100),
+      usageRecord(2, "covered", { input_tokens: 50, output_tokens: 0 }), compacted("covered", 3), count(4, 150),
+      usageRecord(5, "remote", { input_tokens: 30, output_tokens: 0 }), marker,
+      record(7, "response_item", { type: "tool_output", nested: compacted("fake"), text: "x".repeat(3 * 1024 * 1024) }),
+      usageRecord(8, "fake", { input_tokens: 999, output_tokens: 0 })];
+    writeFileSync(join(home, "main.jsonl.zst"), zstdCompressSync(Buffer.from(rows.map(r => JSON.stringify(r)).join("\n"))));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 180);
+    assert.deepEqual(data.events.filter(e => e.responseId).map(e => e.responseId), ["remote"]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a foreign thread's exact carried counter is a baseline, including its inherited last request", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-guardian-"));
+  try {
+    const total = { input_tokens: 890, output_tokens: 10, total_tokens: 900 };
+    const seed = count(1, 900); seed.payload.info.last_token_usage = { input_tokens: 90, output_tokens: 10, total_tokens: 100 };
+    const rows = [record(0, "session_meta", { id: "guardian", parent_thread_id: "parent" }),
+      record(0, "compacted", { latest_token_usage_record: { thread_id: "parent", thread_token_usage: total } }),
+      seed, event(2, "task_started", { turn_id: "own" }), count(3, 950)];
+    writeFileSync(join(home, "guardian.jsonl"), rows.map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.deepEqual(data.events.map(e => e.usage.total_tokens), [50]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("resumed segments subtract only a full-vector baseline proven by an earlier source of the same session", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-resumed-"));
+  try {
+    const parent = count(10, 100); parent.payload.info.last_token_usage = { input_tokens: 40, output_tokens: 0, total_tokens: 40 };
+    writeFileSync(join(home, "first.jsonl"), [record(0, "session_meta", { id: "same" }), parent].map(r => JSON.stringify(r)).join("\n"));
+    const first = count(20, 150); first.payload.info.last_token_usage = { input_tokens: 50, output_tokens: 0, total_tokens: 50 };
+    writeFileSync(join(home, "resumed.jsonl"), [record(15, "session_meta", { id: "same" }), first, count(30, 170)].map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 170);
+    assert.equal(data.events.find(e => e.source.endsWith("first.jsonl")).usage.total_tokens, 100);
+    assert.equal(data.events.find(e => e.source.endsWith("resumed.jsonl")).usage.total_tokens, 50);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("delayed task-start logging does not discard requests inside explicit actual task boundaries", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-delayed-"));
+  try {
+    const rows = [record(0, "session_meta", { id: "delayed" }), event(4, "task_started", { turn_id: "own", started_at: epoch + 1 }),
+      count(10, 100), usageRecord(20, "compact", { input_tokens: 50, output_tokens: 0 }, { turn_id: "own" }), compacted("compact"),
+      event(30, "task_complete", { turn_id: "own", started_at: epoch + 1, completed_at: epoch + 30 })];
+    writeFileSync(join(home, "delayed.jsonl"), rows.map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 150);
+    assert.equal(data.coverage.undatedUsage, 0);
+    assert.ok(data.intervals.every(i => i.partial));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("a compaction covered in one source is not added from a copied source without its counter", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-compact-covered-copy-"));
+  try {
+    const request = usageRecord(2, "shared", { input_tokens: 330, output_tokens: 0 });
+    const copy = [record(0, "session_meta", { id: "copy" }), request, compacted("shared", 4)];
+    const original = [record(0, "session_meta", { id: "original" }), count(1, 100), request, count(3, 430), compacted("shared", 4)];
+    writeFileSync(join(home, "a-copy.jsonl"), copy.map(r => JSON.stringify(r)).join("\n"));
+    writeFileSync(join(home, "z-original.jsonl"), original.map(r => JSON.stringify(r)).join("\n"));
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 430);
+    assert.equal(data.events.filter(e => e.responseId).length, 0);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("overlapping copied and resumed streams deduplicate after inherited counters are normalized", async () => {
+  const home = mkdtempSync(join(tmpdir(), "codex-usage-resumed-overlap-"));
+  try {
+    const write = (path, start, rows) => writeFileSync(join(home, path), [record(start, "session_meta", { id: "same" }), ...rows].map(r => JSON.stringify(r)).join("\n"));
+    write("a-first.jsonl", 0, [count(10, 100)]);
+    write("b-full-copy.jsonl", 0, [count(10, 100), count(20, 150), count(30, 170)]);
+    const first = count(20, 150); first.payload.info.last_token_usage = { input_tokens: 50, output_tokens: 0, total_tokens: 50 };
+    write("c-resumed.jsonl", 15, [first, count(30, 170)]);
+    const data = await readUsageData(epoch, epoch + 100, { home, roots: [home] });
+    assert.equal(buildUsageReport(data).summary.total_tokens, 170);
+    assert.equal(data.events.length, 3);
+    assert.equal(data.coverage.duplicateEvents, 3);
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });
