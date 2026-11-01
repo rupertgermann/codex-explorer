@@ -39,7 +39,7 @@ Event-only, interval-heavy and mixed session tests exceed 150,000 timestamp inpu
 
 ## v0.9.0 follow-up: quota, daily buckets and session exports
 
-These comparisons use the v0.9.0 code at `bfbabab` and the changes for #45–#47. Each side receives the same synthetic report. Timed runs alternate order and validate complete output equality. They ran on a shared 12-core host; load was variable. The browser measurements use isolated production builds, Chrome, and a mocked `/api/usage` response. They exclude archive scanning and network transfer.
+These comparisons use the v0.9.0 code at `bfbabab` and the changes for #45–#47. Each side receives the same synthetic report. Timed runs alternate order. Node calculations and downloaded CSVs are checked for complete output equality; browser controls are checked against fixture totals. They ran on a shared 12-core host; load was variable. The browser measurements use isolated production builds, Chrome, and a mocked `/api/usage` response. They exclude archive scanning and network transfer.
 
 | Work measured | Baseline median (range), ms | Revised median (range), ms | Runs |
 | --- | --- | --- | --- |
