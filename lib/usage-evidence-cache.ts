@@ -9,7 +9,7 @@ import type { JsonRecord } from "./sessions.ts";
 export type Evidence = { records: { record: JsonRecord; line: number }[]; skippedLines: number };
 export const EVIDENCE_BUDGET = 64 * 1024 * 1024;
 // Bump when telemetry normalization or timestamp compaction changes.
-const VERSION = 1;
+const TELEMETRY_FORMAT_VERSION = 1;
 const digest = (bytes: Buffer) => createHash("sha256").update(bytes).digest();
 const cachePath = (directory: string, source: string) => join(directory, createHash("sha256").update(resolve(source)).digest("hex") + ".bin");
 
@@ -29,7 +29,7 @@ export function readUsageEvidence(directory: string, source: string, revision: s
     const payload = contents.subarray(32);
     if (!digest(payload).equals(contents.subarray(0, 32))) return;
     const entry = deserialize(payload);
-    if (entry?.version !== VERSION || entry.source !== resolve(source) || entry.revision !== revision
+    if (entry?.version !== TELEMETRY_FORMAT_VERSION || entry.source !== resolve(source) || entry.revision !== revision
       || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > EVIDENCE_BUDGET
       || !Number.isSafeInteger(entry.evidence?.skippedLines) || entry.evidence.skippedLines < 0
       || !Array.isArray(entry.evidence.records)) return;
@@ -49,7 +49,7 @@ export async function writeUsageEvidence(directory: string, source: string, revi
   const target = cachePath(directory, source), temporary = `${target}.${randomUUID()}.tmp`;
   let published = false;
   try {
-    const payload = serialize({ version: VERSION, source: resolve(source), revision, evidence, bytes });
+    const payload = serialize({ version: TELEMETRY_FORMAT_VERSION, source: resolve(source), revision, evidence, bytes });
     if (payload.length + 32 > EVIDENCE_BUDGET) return false;
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     writeFileSync(temporary, Buffer.concat([digest(payload), payload]), { flag: "wx", mode: 0o600 });

@@ -68,7 +68,7 @@ export async function generateUsageData(since: number, until: number, options: U
   return data;
 }
 
-/** Read-only unless an evidence cache directory is supplied. Adapted from extract_usage.py and active_intervals(). */
+/** Read-only unless an evidence cache directory is supplied. */
 export async function readUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) throw new Error("Choose a valid start and a later end.");
   options.signal?.throwIfAborted();
