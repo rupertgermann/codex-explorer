@@ -40,7 +40,7 @@ type CompactionRequest = { event: UsageEvent; threadUsage: Tokens | null; owned:
 
 type Turn = { start?: number; end?: number; actualStart?: number; actualEnd?: number; last: number; firstEvent?: number; contexts: (Dimensions & { t: number })[] };
 
-type UsageOptions = { home?: string; roots?: string[]; signal?: AbortSignal };
+type UsageOptions = { home?: string; roots?: string[]; signal?: AbortSignal; evidenceCacheDirectory?: string };
 
 function usageSource(options: UsageOptions) {
   const home = resolve(options.home ?? process.env.CODEX_HOME ?? join(homedir(), ".codex"));
@@ -60,14 +60,15 @@ export function readCachedUsageData(options: UsageOptions = {}): UsageData | nul
 }
 
 export async function generateUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
-  const data = await readUsageData(since, until, options);
+  const data = await readUsageData(since, until, { ...options,
+    evidenceCacheDirectory: options.evidenceCacheDirectory ?? join(process.cwd(), ".cache", "usage-evidence") });
   options.signal?.throwIfAborted();
   data.generatedAt = Date.now() / 1000;
   atomicMemoryWrite(usageCachePath(options), JSON.stringify(data));
   return data;
 }
 
-/** On-demand, read-only scan. Adapted from extract_usage.py and active_intervals(). */
+/** Read-only unless an evidence cache directory is supplied. Adapted from extract_usage.py and active_intervals(). */
 export async function readUsageData(since: number, until: number, options: UsageOptions = {}): Promise<UsageData> {
   if (!Number.isFinite(since) || !Number.isFinite(until) || since >= until) throw new Error("Choose a valid start and a later end.");
   options.signal?.throwIfAborted();
@@ -237,7 +238,7 @@ export async function readUsageData(since: number, until: number, options: Usage
           const last = tokens(object(p.info).last_token_usage);
           if (initial && !forked && last && validTokens(last)) initialSnapshots.push({ event, total, last });
         }
-      }, options.signal);
+      }, options.signal, options.evidenceCacheDirectory);
       data.coverage.skippedRecords += scan.skippedLines;
       if (rewritten) data.coverage.rewrittenSessions++;
       for (const responseId of compacted) {

@@ -2,6 +2,7 @@ import { setImmediate } from "node:timers/promises";
 import { SessionFileCache, sessionFileRevision } from "./session-file-cache.ts";
 import { scanJsonl, type JsonRecord } from "./sessions.ts";
 import { TOKEN_FIELDS } from "./usage-report.ts";
+import { EVIDENCE_BUDGET, readUsageEvidence, writeUsageEvidence, type Evidence } from "./usage-evidence-cache.ts";
 
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const scalar = (value: unknown) => value === null || ["string", "number", "boolean"].includes(typeof value) ? value : false;
@@ -55,23 +56,34 @@ function telemetry(record: JsonRecord): JsonRecord {
   return Number.isFinite(timestamp) ? { timestamp } : base;
 }
 
-type Evidence = { records: { record: JsonRecord; line: number }[]; skippedLines: number };
 // No raw content or date-clipped results. Oversized files stream without being retained.
-const evidenceCache = new SessionFileCache<Evidence>(64 * 1024 * 1024, "scan-resistant");
+type ResidentEvidence = { evidence: Evidence; bytes: number; directory?: string };
+const evidenceCache = new SessionFileCache<ResidentEvidence>(EVIDENCE_BUDGET, "scan-resistant");
 export const pruneUsageTelemetry = (paths: Set<string>) => evidenceCache.retain(paths);
 
-export async function scanUsageTelemetry(path: string, visit: (record: JsonRecord, line: number) => void, signal?: AbortSignal) {
+export async function scanUsageTelemetry(path: string, visit: (record: JsonRecord, line: number) => void, signal?: AbortSignal, cacheDirectory?: string) {
   signal?.throwIfAborted();
   const revision = sessionFileRevision(path);
-  const cached = evidenceCache.get(path, revision);
+  let cached = evidenceCache.get(path, revision);
+  if (!cached && cacheDirectory) {
+    const persisted = readUsageEvidence(cacheDirectory, path, revision);
+    if (persisted && sessionFileRevision(path) === revision) {
+      cached = { ...persisted, directory: cacheDirectory };
+      evidenceCache.set(path, revision, cached, persisted.bytes);
+    }
+  }
   if (cached) {
-    for (let i = 0; i < cached.records.length; i++) {
+    if (cacheDirectory && cached.directory !== cacheDirectory) {
+      const persisted = readUsageEvidence(cacheDirectory, path, revision);
+      if (persisted || await writeUsageEvidence(cacheDirectory, path, revision, cached.evidence, cached.bytes, signal)) cached.directory = cacheDirectory;
+    }
+    for (let i = 0; i < cached.evidence.records.length; i++) {
       if (i % 512 === 0) { await setImmediate(); signal?.throwIfAborted(); }
-      const { record, line } = cached.records[i];
+      const { record, line } = cached.evidence.records[i];
       visit(record, line);
     }
     signal?.throwIfAborted();
-    return { skippedLines: cached.skippedLines };
+    return { skippedLines: cached.evidence.skippedLines };
   }
   let records: Evidence["records"] = [], bytes = 0, lastRecordBytes = 0, retain = true;
   const scan = await scanJsonl(path, Infinity, (raw, line) => {
@@ -94,6 +106,11 @@ export async function scanUsageTelemetry(path: string, visit: (record: JsonRecor
     if (bytes > evidenceCache.budget) { retain = false; records = []; }
   }, { signal, maxRecordBytes: 32 * 1024 * 1024 });
   signal?.throwIfAborted();
-  if (retain && sessionFileRevision(path) === revision) evidenceCache.set(path, revision, { records, skippedLines: scan.skippedLines }, bytes + 128);
+  if (retain && sessionFileRevision(path) === revision) {
+    const evidence = { records, skippedLines: scan.skippedLines };
+    const persisted = cacheDirectory && await writeUsageEvidence(cacheDirectory, path, revision, evidence, bytes + 128, signal);
+    if (sessionFileRevision(path) === revision) evidenceCache.set(path, revision,
+      { evidence, bytes: bytes + 128, directory: persisted ? cacheDirectory : undefined }, bytes + 128);
+  }
   return scan;
 }
