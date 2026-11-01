@@ -39,13 +39,13 @@ Event-only, interval-heavy and mixed session tests exceed 150,000 timestamp inpu
 
 ## v0.9.0 follow-up: quota, daily buckets and session exports
 
-These comparisons use the v0.9.0 code at `bfbabab` and the changes for #45–#47. Each side receives the same synthetic report. Timed runs alternate order. Node calculations and downloaded CSVs are checked for complete output equality; browser controls are checked against fixture totals. They ran on a shared 12-core host; load was variable. The browser measurements use isolated production builds, Chrome, and a mocked `/api/usage` response. They exclude archive scanning and network transfer.
+These comparisons use the v0.9.0 code at `bfbabab` and the merged implementation for #45–#47 at `7eb96a8`. The daily calculation baseline includes #45; the fixture has no quota snapshots. Each side receives the same synthetic report. Timed runs alternate order. Node calculations and downloaded CSVs are checked for complete output equality; browser controls are checked against fixture totals. They ran on a shared 12-core host; load was variable. The browser measurements use isolated production builds, Chrome, and a mocked `/api/usage` response. They exclude archive scanning and network transfer.
 
 | Work measured | Baseline median (range), ms | Revised median (range), ms | Runs |
 | --- | --- | --- | --- |
-| Quota calculation in Node | 895 (824–1,109) | 97 (77–223) | 5 pairs |
-| Daily buckets in Node, GC before each run | 71.7 (70.4–76.9) | 43.8 (43.0–83.0) | 7 pairs |
-| Whole report calculation in Node | 378 (289–461) | 308 (287–385) | 5 pairs |
+| Quota calculation in Node | 877 (819–988) | 82 (75–152) | 5 pairs |
+| Daily buckets in Node, GC before each run | 75.9 (68.9–81.6) | 46.0 (42.7–54.7) | 7 pairs |
+| Whole report calculation in Node | 333 (278–541) | 263 (237–280) | 5 pairs |
 | Minimum quota duration control in Chrome | 1,385 (1,368–1,465) | 541 (514–626) | 5 pairs |
 | Effort filter in Chrome | 879 (817–885) | 821 (779–875) | 5 pairs |
 | Session-hourly CSV download in Chrome | 3,821 (3,809–4,136) | 138 (76–399) | 5 pairs |
