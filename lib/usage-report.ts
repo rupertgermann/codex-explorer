@@ -65,20 +65,35 @@ export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[]
     buckets.push({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} });
     start = end;
   }
+  function firstBucketEndingAfter(time: number) {
+    let left = 0, right = buckets.length;
+    while (left < right) {
+      const middle = Math.floor((left + right) / 2);
+      if (buckets[middle].end <= time) left = middle + 1;
+      else right = middle;
+    }
+    return left;
+  }
   const parents = new Set(sessions.filter(s => s.parent).map(s => s.id));
   for (const event of events) {
-    const bucket = hours === 24 ? buckets.find(b => event.t >= b.start && event.t < b.end) : buckets[Math.floor((event.t - since) / (hours * 3600))];
-    if (!bucket) continue;
+    const bucket = buckets[hours === 24 ? firstBucketEndingAfter(event.t) : Math.floor((event.t - since) / (hours * 3600))];
+    if (!bucket || (hours === 24 && !(event.t >= bucket.start && event.t < bucket.end))) continue;
     for (const key of TOKEN_FIELDS) bucket[key] += event.usage[key];
     const key = dimensionKey(event);
     bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
     bucket[parents.has(event.sessionId) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
   }
   for (const interval of intervals) {
-    const first = hours === 24 ? 0 : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)));
+    if (hours === 24 && (Number.isNaN(interval.start) || Number.isNaN(interval.end))) {
+      // Preserve the full scan's propagation of invalid interval endpoints.
+      for (const bucket of buckets) bucket.activeSeconds = NaN;
+      continue;
+    }
+    const first = hours === 24 ? firstBucketEndingAfter(interval.start) : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)));
     const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)));
     for (let index = first; index < last; index++) {
       const bucket = buckets[index];
+      if (hours === 24 && bucket.start >= interval.end) break;
       bucket.activeSeconds += Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start));
     }
   }

@@ -458,6 +458,65 @@ test("daily activity preserves local midnight across spring and autumn DST", () 
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
 
+test("daily buckets exactly match exhaustive aggregation for unsorted fractional data and clipped DST days", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Europe/Berlin";
+  const sessions = [{ id: "root", parent: "" }, { id: "child", parent: "root" }];
+  const dims = { model: "fixture", effort: "high", speed: "normal" };
+  const exhaustive = (events, intervals, since, until) => {
+    const buckets = [];
+    for (let start = since; start < until;) {
+      const midnight = new Date(start * 1000); midnight.setHours(24, 0, 0, 0);
+      const end = Math.min(until, midnight.getTime() / 1000);
+      const bucket = { ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} };
+      for (const event of events.filter(e => e.t >= start && e.t < end)) {
+        for (const key of Object.keys(emptyTokens())) bucket[key] += event.usage[key];
+        const key = dimensionKey(event);
+        bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
+        bucket[sessions.some(s => s.id === event.sessionId && s.parent) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
+      }
+      for (const interval of intervals) bucket.activeSeconds += Math.max(0, Math.min(interval.end, end) - Math.max(interval.start, start));
+      buckets.push(bucket);
+      start = end;
+    }
+    return buckets;
+  };
+  try {
+    for (const date of ["2026-03-28T12:30:00", "2026-10-24T12:30:00"]) {
+      const start = new Date(date), end = new Date(date); end.setDate(end.getDate() + 4);
+      const since = start.getTime() / 1000 + .125, until = end.getTime() / 1000 + .375;
+      const empty = exhaustive([], [], since, until);
+      const boundaries = [...empty.map(b => b.start), until];
+      const timestamps = [...boundaries.flatMap(t => [t + .0001, t, t - .0001]),
+        ...Array.from({ length: 500 }, (_, i) => since + (i * 7919.25) % (until - since))].reverse();
+      const events = timestamps.map((t, i) => ({ ...dims, effort: i % 3 ? "high" : "medium", speed: i % 5 ? "normal" : "fast",
+        sessionId: i % 2 ? "root" : "child", t, turn: "turn", source: "fixture", line: i + 1,
+        usage: { input_tokens: i + 4, cached_input_tokens: i % 4, cache_write_input_tokens: i % 3, output_tokens: 3, reasoning_output_tokens: 2, total_tokens: i + 7 } }));
+      const intervals = [[since - 100, since - 1], [since - 100, since], [until, until + 100], [until + 1, until + 100],
+        [since - 100, until + 100], [until, since], [since, since], [until, until],
+        ...boundaries.flatMap(t => [[t - .125, t + .375], [t, t], [t + .5, t - .5]]),
+        ...empty.map(b => [b.start, b.end]),
+        ...Array.from({ length: 80 }, (_, i) => { const t = since + (i * 13243.5) % (until - since); return [t, t + i * 170.25]; })]
+        .reverse().map(([start, end]) => ({ ...dims, sessionId: "root", start, end, partial: false }));
+      const before = structuredClone({ events, intervals, sessions });
+      assert.deepEqual(usageBuckets(events, intervals, sessions, since, until, 24), exhaustive(events, intervals, since, until));
+      assert.deepEqual({ events, intervals, sessions }, before);
+      assert.deepEqual(usageBuckets([], [], sessions, since, until, 24), empty);
+      assert.deepEqual(usageBuckets(events, intervals, sessions, since, since, 24), []);
+      assert.deepEqual(usageBuckets(events, intervals, sessions, until, since, 24), []);
+      for (const interval of intervals) {
+        assert.deepEqual(usageBuckets([], [interval], sessions, since, until, 24), exhaustive([], [interval], since, until));
+      }
+      for (const [start, end] of [[NaN, since], [until, NaN], [NaN, NaN], [-Infinity, Infinity], [Infinity, Infinity], [-Infinity, -Infinity]]) {
+        const intervals = [{ ...dims, sessionId: "root", start, end, partial: false }];
+        assert.deepEqual(usageBuckets([], intervals, sessions, since, until, 24), exhaustive([], intervals, since, until));
+      }
+      const nonfiniteEvents = [NaN, Infinity, -Infinity].map(t => ({ ...events[0], t }));
+      assert.deepEqual(usageBuckets(nonfiniteEvents, [], sessions, since, until, 24), empty);
+    }
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});
+
 test("large event-only, interval-heavy and mixed sessions keep exact bounds without argument spreading", () => {
   const dims = { model: "large", effort: "high", speed: "normal", sessionId: "large", turn: "turn" };
   const event = index => ({ ...dims, t: epoch + index, usage: { ...emptyTokens(), input_tokens: 1, total_tokens: 1 }, source: "fixture", line: index + 1 });
