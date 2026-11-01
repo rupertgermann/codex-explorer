@@ -56,6 +56,42 @@ export function modelRows(events: UsageEvent[], intervals: ActivityInterval[]) {
   }).sort((a, b) => b.total_tokens - a.total_tokens);
 }
 
+function firstBucketEndingAfter(buckets: UsageBucket[], time: number) {
+  let left = 0, right = buckets.length;
+  while (left < right) {
+    const middle = Math.floor((left + right) / 2);
+    if (buckets[middle].end <= time) left = middle + 1;
+    else right = middle;
+  }
+  return left;
+}
+
+function aggregateUsageBuckets(buckets: UsageBucket[], events: UsageEvent[], intervals: ActivityInterval[], parents: Set<string>, since: number, hours: number, offset: number) {
+  for (const event of events) {
+    const bucket = buckets[hours === 24 ? firstBucketEndingAfter(buckets, event.t) : Math.floor((event.t - since) / (hours * 3600)) - offset];
+    if (!bucket || (hours === 24 && !(event.t >= bucket.start && event.t < bucket.end))) continue;
+    for (const key of TOKEN_FIELDS) bucket[key] += event.usage[key];
+    const key = dimensionKey(event);
+    bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
+    bucket[parents.has(event.sessionId) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
+  }
+  for (const interval of intervals) {
+    if (hours === 24 && (Number.isNaN(interval.start) || Number.isNaN(interval.end))) {
+      // Preserve the full scan's propagation of invalid interval endpoints.
+      for (const bucket of buckets) bucket.activeSeconds = NaN;
+      continue;
+    }
+    const first = hours === 24 ? firstBucketEndingAfter(buckets, interval.start) : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)) - offset);
+    const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)) - offset);
+    for (let index = first; index < last; index++) {
+      const bucket = buckets[index];
+      if (hours === 24 && bucket.start >= interval.end) break;
+      bucket.activeSeconds += Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start));
+    }
+  }
+  return buckets;
+}
+
 export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[], sessions: UsageSession[], since: number, until: number, hours: number): UsageBucket[] {
   const buckets: UsageBucket[] = [];
   for (let start = since; start < until;) {
@@ -65,24 +101,30 @@ export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[]
     buckets.push({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} });
     start = end;
   }
-  const parents = new Set(sessions.filter(s => s.parent).map(s => s.id));
-  for (const event of events) {
-    const bucket = hours === 24 ? buckets.find(b => event.t >= b.start && event.t < b.end) : buckets[Math.floor((event.t - since) / (hours * 3600))];
-    if (!bucket) continue;
-    for (const key of TOKEN_FIELDS) bucket[key] += event.usage[key];
-    const key = dimensionKey(event);
-    bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
-    bucket[parents.has(event.sessionId) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
-  }
-  for (const interval of intervals) {
-    const first = hours === 24 ? 0 : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)));
-    const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)));
-    for (let index = first; index < last; index++) {
-      const bucket = buckets[index];
-      bucket.activeSeconds += Math.max(0, Math.min(interval.end, bucket.end) - Math.max(interval.start, bucket.start));
+  return aggregateUsageBuckets(buckets, events, intervals, new Set(sessions.filter(s => s.parent).map(s => s.id)), since, hours, 0);
+}
+
+export function sessionUsageBuckets(data: UsageData, report: ReturnType<typeof buildUsageReport>, hours: 1 | 6) {
+  const grid = hours === 1 ? report.hourly : report.sixHourly;
+  const eventsBySession = Map.groupBy(report.events, e => e.sessionId);
+  const intervalsBySession = Map.groupBy(report.intervals, i => i.sessionId);
+  const parents = new Set(data.sessions.filter(s => s.parent).map(s => s.id));
+  return report.sessions.flatMap(session => {
+    const events = eventsBySession.get(session.id) ?? [];
+    const intervals = intervalsBySession.get(session.id) ?? [];
+    let first = firstBucketEndingAfter(grid, session.start);
+    let last = firstBucketEndingAfter(grid, session.end);
+    if (grid[last]?.start < session.end) last++;
+    // Fractional origins can put an event's original index outside its geometric bucket.
+    for (const event of events) {
+      const index = Math.floor((event.t - data.since) / (hours * 3600));
+      if (index >= 0 && index < grid.length) { first = Math.min(first, index); last = Math.max(last, index + 1); }
     }
-  }
-  return buckets;
+    const buckets = grid.slice(first, last).map(({ start, end }) => ({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} }));
+    return aggregateUsageBuckets(buckets, events, intervals, parents, data.since, hours, first)
+      .filter(b => b.start < session.end && b.end > session.start || b.total_tokens > 0)
+      .map(b => ({ sessionId: session.id, ...b, start: Math.max(b.start, session.start), end: Math.min(b.end, session.end) }));
+  });
 }
 
 export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
@@ -131,11 +173,17 @@ export function analyzeQuota(data: UsageData, bucket: string, minimumMinutes = 1
     if (!resetGroups.length || reset - resetGroups.at(-1)![0] > 60) resetGroups.push([]);
     resetGroups.at(-1)!.push(reset);
   }
+  const rowsByReset = new Map<number, QuotaSnapshot[]>();
+  for (const resets of resetGroups) {
+    const rows: QuotaSnapshot[] = [];
+    for (const reset of resets) rowsByReset.set(reset, rows);
+  }
+  for (const snapshot of snapshots) rowsByReset.get(snapshot.resetsAt)!.push(snapshot);
   const activity = [...data.intervals].sort((a, b) => a.start - b.start);
   const cycles: { id: number; start: number; end: number; reset: number; firstPercent: number; highPercent: number; stale: number }[] = [];
   const series: QuotaSegment[] = [], windows: QuotaWindow[] = [];
   for (const resets of resetGroups) {
-    const rows = snapshots.filter(s => resets.includes(s.resetsAt)).sort((a, b) => a.t - b.t || a.sessionId.localeCompare(b.sessionId) || a.line - b.line);
+    const rows = rowsByReset.get(resets[0])!.sort((a, b) => a.t - b.t || a.sessionId.localeCompare(b.sessionId) || a.line - b.line);
     let activityIndex = 0;
     let active: ActivityInterval[] = [];
     let high = rows[0].usedPercent, previous: QuotaSnapshot | undefined, previousHigh = high, connected = false;

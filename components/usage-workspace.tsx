@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { UsageChart, localInput } from "@/components/usage-chart";
-import { analyzeQuota, buildUsageReport, csvText, dimensionKey, dimensionLabel, matchesUsage, perHour, quotaKey, usageBuckets, type UsageData, type UsageFilter } from "@/lib/usage-report";
+import { analyzeQuota, buildUsageReport, csvText, dimensionKey, dimensionLabel, matchesUsage, perHour, quotaKey, sessionUsageBuckets, usageBuckets, type UsageData, type UsageFilter } from "@/lib/usage-report";
 import { formatDate, formatNumber } from "@/lib/utils";
 
 const number = (n: number | null) => n === null ? "—" : n.toLocaleString("en-GB", { maximumFractionDigits: 2 });
@@ -89,7 +89,7 @@ export function UsageWorkspace({ active = true }: { active?: boolean }) {
       case "session-models": rows = report.sessions.flatMap(s => s.models.map(m => ({ sessionId: s.id, title: s.title, ...m }))); break;
       case "hourly": rows = bucketRows(report.hourly); break;
       case "six-hourly": rows = bucketRows(report.sixHourly); break;
-      case "session-hourly": case "session-six-hourly": rows = report.sessions.flatMap(s => bucketRows(usageBuckets(report.events.filter(e => e.sessionId === s.id), report.intervals.filter(i => i.sessionId === s.id), data.sessions, data.since, data.until, exportKind === "session-hourly" ? 1 : 6).filter(b => b.start < s.end && b.end > s.start || b.total_tokens > 0).map(b => ({ ...b, start: Math.max(b.start, s.start), end: Math.min(b.end, s.end) }))).map(b => ({ sessionId: s.id, ...b }))); break;
+      case "session-hourly": case "session-six-hourly": rows = bucketRows(sessionUsageBuckets(data, report, exportKind === "session-hourly" ? 1 : 6)); break;
       case "token-events": rows = report.events.map(({ usage, t, ...e }) => ({ ...e, responseId: e.responseId ?? "", timestamp: iso(t), ...usage })); break;
       case "quota-snapshots": rows = data.snapshots.filter(s => quotaKey(s) === bucket).map(s => ({ ...s, t: iso(s.t), resetsAt: iso(s.resetsAt) })); break;
       case "quota-windows": rows = quota.windows.map(w => ({ ...w, start: iso(w.start), end: iso(w.end) })); break;

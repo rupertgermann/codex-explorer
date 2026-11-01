@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { readUsageData as readTelemetry } from "../lib/usage-repository.ts";
-import { analyzeQuota, buildUsageReport, csvText, dimensionKey, emptyTokens, fitRange, quotaAt, usageBuckets, zoomRange } from "../lib/usage-report.ts";
+import { analyzeQuota, buildUsageReport, csvText, dimensionKey, emptyTokens, fitRange, perHour, quotaAt, sessionUsageBuckets, usageBuckets, zoomRange } from "../lib/usage-report.ts";
 
 // Every accounting fixture also exercises date changes and warm evidence replay.
 async function readUsageData(since, until, options) {
@@ -195,6 +195,67 @@ test("quota activity stays correct across nonchronological cycles, touching boun
   assert.deepEqual(data.intervals, before);
 });
 
+test("quota reset tolerance is anchored to the first reset and preserves tied input provenance", () => {
+  const dims = { model: "model", effort: "high", speed: "normal" };
+  const point = (t, usedPercent, resetOffset, source, line) => ({ ...dims, sessionId: "a", t, usedPercent,
+    resetsAt: 10000 + resetOffset, limitId: "codex", windowMinutes: 300, source, line, reliable: true });
+  const snapshots = [point(1000, 10, 60, "first", 7), point(100, 20, 120, "early", 11),
+    point(1000, 12, 0, "second", 7), point(1100, 11, 60, "stale", 8),
+    point(200, 22, 61, "early-end", 12), point(1200, 14, 0, "recovered", 9), point(1300, 15, 60, "last", 10)];
+  const intervals = [{ ...dims, sessionId: "a", start: 0, end: 1500, partial: false }];
+  const before = structuredClone({ snapshots, intervals });
+  const windows = [
+    { cycle: 1, start: 1000, end: 1000, category: "same_timestamp", sessionId: null, dimensions: null,
+      startPercent: 10, endPercent: 12, observedPp: 2, firstSource: "first", firstLine: 7, lastSource: "second", lastLine: 7 },
+    { cycle: 1, start: 1000, end: 1200, category: "stale_counter", sessionId: null, dimensions: null,
+      startPercent: 12, endPercent: 14, observedPp: 2, firstSource: "second", firstLine: 7, lastSource: "recovered", lastLine: 9 },
+    { cycle: 1, start: 1200, end: 1300, category: "isolated", sessionId: "a", dimensions: dims,
+      startPercent: 14, endPercent: 15, observedPp: 1, firstSource: "recovered", firstLine: 9, lastSource: "last", lastLine: 10 },
+    { cycle: 2, start: 100, end: 200, category: "isolated", sessionId: "a", dimensions: dims,
+      startPercent: 20, endPercent: 22, observedPp: 2, firstSource: "early", firstLine: 11, lastSource: "early-end", lastLine: 12 },
+  ];
+  const result = analyzeQuota({ snapshots, intervals }, "codex/300", 1);
+  assert.deepEqual(result, { snapshots, cycles: [
+    { id: 1, start: 1000, end: 1300, reset: 10000, firstPercent: 10, highPercent: 15, stale: 1 },
+    { id: 2, start: 100, end: 200, reset: 10061, firstPercent: 20, highPercent: 22, stale: 0 },
+  ], series: [
+    { cycle: 1, points: [[1000, 90], [1000, 88]] }, { cycle: 1, points: [[1200, 86], [1300, 85]] },
+    { cycle: 2, points: [[100, 80], [200, 78]] },
+  ], windows, selected: windows.slice(2), comparison: [{ ...dims, windows: 2, sessions: 1, seconds: 200,
+    observedPp: 3, ppPerHour: 54, low: 18, high: 90 }], observedPp: 7 });
+  assert.deepEqual({ snapshots, intervals }, before);
+  assert.deepEqual(analyzeQuota({ snapshots, intervals }, "codex/300", 2).selected, []);
+});
+
+test("quota reset jitter preserves complete attribution output across excluded and selected windows", () => {
+  const dims = { model: "model", effort: "high", speed: "normal", sessionId: "a" };
+  const interval = { ...dims, start: 0, end: 1200, partial: false };
+  const snapshots = Array.from({ length: 7 }, (_, i) => ({ ...dims, t: i * 200, usedPercent: i,
+    resetsAt: 10000 + (i % 2 ? 0 : 60), limitId: "codex", windowMinutes: 300, source: `source-${i}`, line: i + 1, reliable: true }));
+  const cases = [
+    { intervals: [interval], snapshots },
+    { intervals: [], snapshots },
+    { intervals: [{ ...interval, partial: true }], snapshots },
+    { intervals: [interval, { ...interval, sessionId: "other", start: 100, end: 500 }], snapshots },
+    { intervals: [interval, { ...interval, model: "other", start: 100, end: 500 }], snapshots },
+    { intervals: [{ ...interval, end: 50 }, { ...interval, start: 100 }], snapshots },
+    { intervals: [interval], snapshots: snapshots.map((s, i) => ({ ...s, usedPercent: i === 3 ? 0 : i })) },
+    { intervals: [interval], snapshots: snapshots.map(s => ({ ...s, usedPercent: 100 })) },
+    { intervals: [interval], snapshots: snapshots.filter((_, i) => i !== 2) },
+    { intervals: [interval], snapshots: snapshots.map((s, i) => i > 2 ? { ...s, speed: "fast", sessionId: "other" } : s) },
+  ];
+  for (const data of cases) {
+    const fixedReset = data.snapshots.map(s => ({ ...s, resetsAt: 10000 }));
+    for (const minimumMinutes of [0, 10, 30]) {
+      const expected = analyzeQuota({ ...data, snapshots: fixedReset }, "codex/300", minimumMinutes);
+      const actual = analyzeQuota(data, "codex/300", minimumMinutes);
+      assert.deepEqual(actual, { ...expected, snapshots: data.snapshots });
+      assert.equal(csvText(actual.windows), csvText(expected.windows));
+      assert.equal(csvText(actual.comparison), csvText(expected.comparison));
+    }
+  }
+});
+
 const usageRecord = (t, responseId, usage, extra = {}) => record(t, "token_usage_record", { response_id: responseId, usage, ...extra });
 const compacted = (responseId, t) => t === undefined ? { type: "compacted", payload: { compaction_response_id: responseId } } : record(t, "compacted", { compaction_response_id: responseId });
 
@@ -381,6 +442,93 @@ test("hourly activity bucketing matches clipped overlap at every boundary", () =
   assert.deepEqual(usageBuckets([], [], [], 0, 0, 1), []);
 });
 
+function fullRangeSessionBuckets(data, report, hours) {
+  return report.sessions.flatMap(session => usageBuckets(report.events.filter(e => e.sessionId === session.id),
+    report.intervals.filter(i => i.sessionId === session.id), data.sessions, data.since, data.until, hours)
+    .filter(b => b.start < session.end && b.end > session.start || b.total_tokens > 0)
+    .map(b => ({ sessionId: session.id, ...b, start: Math.max(b.start, session.start), end: Math.min(b.end, session.end) })));
+}
+
+function sessionBucketCsv(buckets) {
+  return csvText(buckets.map(({ series, ...b }) => ({ ...b, start: new Date(b.start * 1000).toISOString(),
+    end: new Date(b.end * 1000).toISOString(), tokensPerClockHour: perHour(b.total_tokens, b.end - b.start), series })));
+}
+
+test("session exports exactly preserve full-range rows and CSV for filtered dimensions, overlaps and duplicate IDs", () => {
+  const since = epoch + 1830.125, until = since + 2 * 86400 + 123.5;
+  const dims = { model: 'model;"quoted"\nnext', effort: "high", speed: "normal" };
+  const makeEvent = (sessionId, t, n = 10, extra = {}) => ({ ...dims, sessionId, t, turn: "turn", source: "fixture", line: 1,
+    usage: { input_tokens: n, cached_input_tokens: n / 3, cache_write_input_tokens: n / 5, output_tokens: 2, reasoning_output_tokens: 1, total_tokens: n + 2 }, ...extra });
+  const makeInterval = (sessionId, start, end, extra = {}) => ({ ...dims, sessionId, start, end, partial: false, ...extra });
+  const ids = ["zero-boundary", "duplicate", '=session;"quoted"\nnext', "final", "zero-interior", "outside", "zero-tokens", "no-events"];
+  const data = { since, until, sessions: [...ids.map(id => ({ id, parent: "", title: id, project: "fixture", sources: [] })),
+    { id: "duplicate", parent: "root", title: "Duplicate parent metadata", project: "fixture", sources: [] }], snapshots: [],
+    events: [makeEvent(ids[0], since + 21600), makeEvent(ids[1], since + 7200, 12), makeEvent(ids[2], since + 200, 50),
+      makeEvent(ids[2], since + 21600, .2, { model: "other", effort: "low", speed: "fast" }), makeEvent(ids[2], since, .1),
+      makeEvent(ids[2], since + 21600, .3), makeEvent(ids[3], until, 20), makeEvent(ids[4], since + 100, 2),
+      makeEvent(ids[5], since - 10000, 4), makeEvent(ids[6], since + 3610, 0, { usage: emptyTokens() })],
+    intervals: [makeInterval(ids[2], since + 3500, since + 21700), makeInterval(ids[2], since - 20, since + 3600),
+      makeInterval(ids[2], since + 3600, since + 3600), makeInterval(ids[2], since + 25000, since + 26000, { turn: "unmeasured" }),
+      makeInterval(ids[1], since + 7100, since + 7300), makeInterval(ids[3], until - 200, until + 100),
+      makeInterval(ids[5], since - 20000, since - 10000), makeInterval(ids[6], since + 3601, since + 3620),
+      makeInterval(ids[7], since, until)] };
+  for (const filter of [{}, { effort: "high" }, { model: "other", speed: "fast" }, { sessionId: ids[2] }, { model: "missing" }]) {
+    const report = buildUsageReport(data, filter), before = structuredClone({ data, report });
+    for (const hours of [1, 6]) {
+      const expected = fullRangeSessionBuckets(data, report, hours), actual = sessionUsageBuckets(data, report, hours);
+      assert.deepEqual(actual, expected);
+      assert.equal(sessionBucketCsv(actual), sessionBucketCsv(expected));
+      if (!Object.keys(filter).length) {
+        assert.deepEqual([...new Set(actual.map(b => b.sessionId))], [ids[2], "final", "duplicate", "zero-boundary", "zero-interior", "zero-tokens"]);
+        assert.equal(actual.filter(b => b.sessionId === "duplicate").length, hours === 1 ? 4 : 2);
+        assert.ok(actual.filter(b => b.sessionId === "duplicate").every(b => b.rootTokens === 0));
+        assert.equal(actual.filter(b => b.sessionId === "duplicate").reduce((sum, b) => sum + b.subagentTokens, 0), 28);
+        assert.ok(actual.some(b => b.total_tokens === 0));
+        const zero = actual.find(b => b.sessionId === "zero-boundary");
+        assert.equal(zero.start, zero.end);
+        assert.equal(zero.total_tokens, 12);
+        assert.ok(!actual.some(b => b.sessionId === "outside"));
+        assert.ok(sessionBucketCsv(actual).includes('"\'=session;""quoted""\nnext"'));
+      }
+    }
+    assert.deepEqual({ data, report }, before);
+  }
+  for (const empty of [{ ...data, events: [], intervals: [] }, { ...data, until: since }]) {
+    const report = buildUsageReport(empty);
+    for (const hours of [1, 6]) {
+      assert.deepEqual(sessionUsageBuckets(empty, report, hours), []);
+      assert.equal(sessionBucketCsv(sessionUsageBuckets(empty, report, hours)), "\uFEFF");
+    }
+  }
+});
+
+test("session exports retain original fractional grid boundaries and original event indices", () => {
+  const dims = { model: "fractional", effort: "high", speed: "normal", sessionId: "one", turn: "turn" };
+  for (const since of [123.0001, 123.1, epoch + .0001]) {
+    for (const hours of [1, 6]) {
+      const step = hours * 3600;
+      for (const index of [1, 2, 3, 7, 11]) {
+        const t = since + index * step;
+        for (const intervals of [[], [{ ...dims, start: t - step / 2, end: t, partial: false }]]) {
+          const data = { since, until: since + 13 * step + 123, sessions: [{ id: "one", parent: "" }], snapshots: [], intervals,
+            events: [{ ...dims, t, usage: { ...emptyTokens(), input_tokens: 10, total_tokens: 10 } }] };
+          const report = buildUsageReport(data);
+          const expected = fullRangeSessionBuckets(data, report, hours), actual = sessionUsageBuckets(data, report, hours);
+          assert.deepEqual(actual, expected, JSON.stringify({ since, hours, index, intervals }));
+          assert.equal(sessionBucketCsv(actual), sessionBucketCsv(expected));
+          if (since === 123.0001 && hours === 1 && index === 3 && !intervals.length) {
+            assert.equal(actual.length, 2);
+            assert.equal(actual[0].total_tokens, 0);
+            assert.equal(actual[1].start, 10923.000100000001);
+            assert.equal(actual[1].end, t);
+            assert.equal(actual[1].total_tokens, 10);
+          }
+        }
+      }
+    }
+  }
+});
+
 test("daily activity preserves local midnight across spring and autumn DST", () => {
   const previous = process.env.TZ;
   process.env.TZ = "Europe/Berlin";
@@ -393,6 +541,65 @@ test("daily activity preserves local midnight across spring and autumn DST", () 
       assert.deepEqual(buckets.map(b => (b.end - b.start) / 3600), expectedHours);
       assert.deepEqual(buckets.map(b => b.activeSeconds / 3600), expectedHours);
       assert.ok(buckets.every(b => new Date(b.start * 1000).getHours() === 0));
+    }
+  } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+});
+
+test("daily buckets exactly match exhaustive aggregation for unsorted fractional data and clipped DST days", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Europe/Berlin";
+  const sessions = [{ id: "root", parent: "" }, { id: "child", parent: "root" }];
+  const dims = { model: "fixture", effort: "high", speed: "normal" };
+  const exhaustive = (events, intervals, since, until) => {
+    const buckets = [];
+    for (let start = since; start < until;) {
+      const midnight = new Date(start * 1000); midnight.setHours(24, 0, 0, 0);
+      const end = Math.min(until, midnight.getTime() / 1000);
+      const bucket = { ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} };
+      for (const event of events.filter(e => e.t >= start && e.t < end)) {
+        for (const key of Object.keys(emptyTokens())) bucket[key] += event.usage[key];
+        const key = dimensionKey(event);
+        bucket.series[key] = (bucket.series[key] ?? 0) + event.usage.total_tokens;
+        bucket[sessions.some(s => s.id === event.sessionId && s.parent) ? "subagentTokens" : "rootTokens"] += event.usage.total_tokens;
+      }
+      for (const interval of intervals) bucket.activeSeconds += Math.max(0, Math.min(interval.end, end) - Math.max(interval.start, start));
+      buckets.push(bucket);
+      start = end;
+    }
+    return buckets;
+  };
+  try {
+    for (const date of ["2026-03-28T12:30:00", "2026-10-24T12:30:00"]) {
+      const start = new Date(date), end = new Date(date); end.setDate(end.getDate() + 4);
+      const since = start.getTime() / 1000 + .125, until = end.getTime() / 1000 + .375;
+      const empty = exhaustive([], [], since, until);
+      const boundaries = [...empty.map(b => b.start), until];
+      const timestamps = [...boundaries.flatMap(t => [t + .0001, t, t - .0001]),
+        ...Array.from({ length: 500 }, (_, i) => since + (i * 7919.25) % (until - since))].reverse();
+      const events = timestamps.map((t, i) => ({ ...dims, effort: i % 3 ? "high" : "medium", speed: i % 5 ? "normal" : "fast",
+        sessionId: i % 2 ? "root" : "child", t, turn: "turn", source: "fixture", line: i + 1,
+        usage: { input_tokens: i + 4, cached_input_tokens: i % 4, cache_write_input_tokens: i % 3, output_tokens: 3, reasoning_output_tokens: 2, total_tokens: i + 7 } }));
+      const intervals = [[since - 100, since - 1], [since - 100, since], [until, until + 100], [until + 1, until + 100],
+        [since - 100, until + 100], [until, since], [since, since], [until, until],
+        ...boundaries.flatMap(t => [[t - .125, t + .375], [t, t], [t + .5, t - .5]]),
+        ...empty.map(b => [b.start, b.end]),
+        ...Array.from({ length: 80 }, (_, i) => { const t = since + (i * 13243.5) % (until - since); return [t, t + i * 170.25]; })]
+        .reverse().map(([start, end]) => ({ ...dims, sessionId: "root", start, end, partial: false }));
+      const before = structuredClone({ events, intervals, sessions });
+      assert.deepEqual(usageBuckets(events, intervals, sessions, since, until, 24), exhaustive(events, intervals, since, until));
+      assert.deepEqual({ events, intervals, sessions }, before);
+      assert.deepEqual(usageBuckets([], [], sessions, since, until, 24), empty);
+      assert.deepEqual(usageBuckets(events, intervals, sessions, since, since, 24), []);
+      assert.deepEqual(usageBuckets(events, intervals, sessions, until, since, 24), []);
+      for (const interval of intervals) {
+        assert.deepEqual(usageBuckets([], [interval], sessions, since, until, 24), exhaustive([], [interval], since, until));
+      }
+      for (const [start, end] of [[NaN, since], [until, NaN], [NaN, NaN], [-Infinity, Infinity], [Infinity, Infinity], [-Infinity, -Infinity]]) {
+        const intervals = [{ ...dims, sessionId: "root", start, end, partial: false }];
+        assert.deepEqual(usageBuckets([], intervals, sessions, since, until, 24), exhaustive([], intervals, since, until));
+      }
+      const nonfiniteEvents = [NaN, Infinity, -Infinity].map(t => ({ ...events[0], t }));
+      assert.deepEqual(usageBuckets(nonfiniteEvents, [], sessions, since, until, 24), empty);
     }
   } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
 });
