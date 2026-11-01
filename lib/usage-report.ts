@@ -56,27 +56,19 @@ export function modelRows(events: UsageEvent[], intervals: ActivityInterval[]) {
   }).sort((a, b) => b.total_tokens - a.total_tokens);
 }
 
-export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[], sessions: UsageSession[], since: number, until: number, hours: number): UsageBucket[] {
-  const buckets: UsageBucket[] = [];
-  for (let start = since; start < until;) {
-    const nextDay = new Date(start * 1000);
-    nextDay.setHours(24, 0, 0, 0);
-    const end = Math.min(until, hours === 24 ? nextDay.getTime() / 1000 : start + hours * 3600);
-    buckets.push({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} });
-    start = end;
+function firstBucketEndingAfter(buckets: UsageBucket[], time: number) {
+  let left = 0, right = buckets.length;
+  while (left < right) {
+    const middle = Math.floor((left + right) / 2);
+    if (buckets[middle].end <= time) left = middle + 1;
+    else right = middle;
   }
-  function firstBucketEndingAfter(time: number) {
-    let left = 0, right = buckets.length;
-    while (left < right) {
-      const middle = Math.floor((left + right) / 2);
-      if (buckets[middle].end <= time) left = middle + 1;
-      else right = middle;
-    }
-    return left;
-  }
-  const parents = new Set(sessions.filter(s => s.parent).map(s => s.id));
+  return left;
+}
+
+function aggregateUsageBuckets(buckets: UsageBucket[], events: UsageEvent[], intervals: ActivityInterval[], parents: Set<string>, since: number, hours: number, offset: number) {
   for (const event of events) {
-    const bucket = buckets[hours === 24 ? firstBucketEndingAfter(event.t) : Math.floor((event.t - since) / (hours * 3600))];
+    const bucket = buckets[hours === 24 ? firstBucketEndingAfter(buckets, event.t) : Math.floor((event.t - since) / (hours * 3600)) - offset];
     if (!bucket || (hours === 24 && !(event.t >= bucket.start && event.t < bucket.end))) continue;
     for (const key of TOKEN_FIELDS) bucket[key] += event.usage[key];
     const key = dimensionKey(event);
@@ -89,8 +81,8 @@ export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[]
       for (const bucket of buckets) bucket.activeSeconds = NaN;
       continue;
     }
-    const first = hours === 24 ? firstBucketEndingAfter(interval.start) : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)));
-    const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)));
+    const first = hours === 24 ? firstBucketEndingAfter(buckets, interval.start) : Math.max(0, Math.floor((interval.start - since) / (hours * 3600)) - offset);
+    const last = hours === 24 ? buckets.length : Math.min(buckets.length, Math.ceil((interval.end - since) / (hours * 3600)) - offset);
     for (let index = first; index < last; index++) {
       const bucket = buckets[index];
       if (hours === 24 && bucket.start >= interval.end) break;
@@ -98,6 +90,41 @@ export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[]
     }
   }
   return buckets;
+}
+
+export function usageBuckets(events: UsageEvent[], intervals: ActivityInterval[], sessions: UsageSession[], since: number, until: number, hours: number): UsageBucket[] {
+  const buckets: UsageBucket[] = [];
+  for (let start = since; start < until;) {
+    const nextDay = new Date(start * 1000);
+    nextDay.setHours(24, 0, 0, 0);
+    const end = Math.min(until, hours === 24 ? nextDay.getTime() / 1000 : start + hours * 3600);
+    buckets.push({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} });
+    start = end;
+  }
+  return aggregateUsageBuckets(buckets, events, intervals, new Set(sessions.filter(s => s.parent).map(s => s.id)), since, hours, 0);
+}
+
+export function sessionUsageBuckets(data: UsageData, report: ReturnType<typeof buildUsageReport>, hours: 1 | 6) {
+  const grid = hours === 1 ? report.hourly : report.sixHourly;
+  const eventsBySession = Map.groupBy(report.events, e => e.sessionId);
+  const intervalsBySession = Map.groupBy(report.intervals, i => i.sessionId);
+  const parents = new Set(data.sessions.filter(s => s.parent).map(s => s.id));
+  return report.sessions.flatMap(session => {
+    const events = eventsBySession.get(session.id) ?? [];
+    const intervals = intervalsBySession.get(session.id) ?? [];
+    let first = firstBucketEndingAfter(grid, session.start);
+    let last = firstBucketEndingAfter(grid, session.end);
+    if (grid[last]?.start < session.end) last++;
+    // Fractional origins can put an event's original index outside its geometric bucket.
+    for (const event of events) {
+      const index = Math.floor((event.t - data.since) / (hours * 3600));
+      if (index >= 0 && index < grid.length) { first = Math.min(first, index); last = Math.max(last, index + 1); }
+    }
+    const buckets = grid.slice(first, last).map(({ start, end }) => ({ ...emptyTokens(), start, end, activeSeconds: 0, rootTokens: 0, subagentTokens: 0, series: {} }));
+    return aggregateUsageBuckets(buckets, events, intervals, parents, data.since, hours, first)
+      .filter(b => b.start < session.end && b.end > session.start || b.total_tokens > 0)
+      .map(b => ({ sessionId: session.id, ...b, start: Math.max(b.start, session.start), end: Math.min(b.end, session.end) }));
+  });
 }
 
 export function buildUsageReport(data: UsageData, filter: UsageFilter = {}) {
