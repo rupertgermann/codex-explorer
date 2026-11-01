@@ -62,3 +62,31 @@ test("a warm flat catalog yields so request cancellation can interrupt cached he
     assert.strictEqual(await repository.catalog(), before);
   } finally { fs.statSync = original; syncBuiltinESMExports(); fs.rmSync(root, { recursive: true, force: true }); }
 });
+
+test("a failed catalog header settles its bounded batch before rejecting and preserves the cached catalog", async () => {
+  const root = fs.mkdtempSync(join(tmpdir(), "catalog-read-failure-"));
+  const repository = new SessionRepository(root);
+  const before = await repository.catalog();
+  for (let i = 0; i < 20; i++) fs.writeFileSync(join(root, `${i}.jsonl`), JSON.stringify({ type: "session_meta", payload: { id: String(i) } }) + "\n");
+  const original = fs.createReadStream;
+  const failure = new Error("header read failed");
+  const streams = [];
+  let opened = 0;
+  fs.createReadStream = (...args) => {
+    if (++opened === 1) throw failure;
+    const stream = original(...args);
+    streams.push(stream);
+    return stream;
+  };
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(repository.catalog({ refresh: true }), error => error === failure);
+    assert.equal(opened, 8);
+    assert.ok(streams.every(stream => stream.destroyed));
+    assert.strictEqual(await repository.catalog(), before);
+  } finally {
+    fs.createReadStream = original;
+    syncBuiltinESMExports();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

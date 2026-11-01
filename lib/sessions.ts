@@ -490,8 +490,21 @@ export class SessionRepository {
     const cached = sessionCatalogCache.get(this.root);
     if (cached && !options.refresh) return cached;
 
+    const paths: string[] = [];
     const sessions: SessionSummary[] = [];
-    for await (const path of catalogPaths(this.root, options.signal)) sessions.push(await summary(this.root, path, options.signal));
+    const readBatch = async () => {
+      const results = await Promise.allSettled(paths.map(path => summary(this.root, path, options.signal)));
+      for (const result of results) {
+        if (result.status === "rejected") throw result.reason;
+        sessions.push(result.value);
+      }
+      paths.length = 0;
+    };
+    for await (const path of catalogPaths(this.root, options.signal)) {
+      paths.push(path);
+      if (paths.length === 8) await readBatch();
+    }
+    await readBatch();
     options.signal?.throwIfAborted();
     summaryCache.prune(this.root, new Set(sessions.map(session => join(this.root, session.path))));
     sessions.sort((left, right) => right.startedAt - left.startedAt || left.path.localeCompare(right.path));

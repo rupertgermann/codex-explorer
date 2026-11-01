@@ -59,3 +59,15 @@ The daily fixture spans 365 days in `Europe/Berlin`, including partial endpoints
 The CSV fixture contains 1,000 short sessions across a one-year report. Every hourly download returned 1,000 rows; complete baseline and revised CSV bytes matched in every pair. A six-hour download also matched byte for byte. The baseline browser profile sampled `emptyTokens` and `usageBuckets` heavily while constructing report-wide buckets for every session. Afterward, the separate profile was dominated by Playwright's accessible-button lookup and browser work. These timings include that automation overhead. The fixture construction is documented in [#47](https://github.com/rupertgermann/codex-explorer/issues/47).
 
 Focused tests additionally cover reset tolerance and tie ordering, nonchronological quota cycles, local-day boundaries in both daylight-saving transitions, fractional grid origins, duplicate session IDs, filtered reports, empty buckets, zero-duration sessions and complete CSV serialization. Browser tests exercise the quota controls and both session export kinds. No private archives or saved reports were used.
+
+## Persistent evidence and catalog headers
+
+The following checks use a private, frozen copy of a local archive with about 9,700 session files and 32 GiB of source data. The report covers 30 days. Production builds use the same snapshot and period. No session contents or report data are included here.
+
+One pre-change browser run took 233.9 seconds from the regenerate click until the updated report was visible and the button was enabled. Building the persistent evidence cache took 208.7 seconds in one run. After a process restart, regeneration with that cache took 14.9 seconds. These single runs use a potentially warm operating-system file cache; they do not establish a cold-start speedup.
+
+After appending a synthetic turn to a 581 MiB cloned session, regeneration took 25.0 seconds with the persistent cache. Two further appends with concurrent header reads took 15.0 and 11.3 seconds. The complete generated reports matched the previous implementation byte for byte apart from `generatedAt`. Compare saved reports with `node scripts/compare-usage-reports.mjs before.json after.json`; the command reports equality without printing report contents.
+
+Ten alternating pairs measured fresh-process catalog construction over the same snapshot. The sequential median was 3.33 seconds (range 3.17 to 5.18 seconds); bounded concurrent header reads had a median of 1.96 seconds (range 1.64 to 4.60 seconds). Every pair produced the same complete catalog after normalizing its indexing time. Host load varied during the measurements.
+
+The evidence cache held approximately 367 MiB for this archive. Individual files whose normalized evidence exceeds the 64 MiB entry limit still use a full scan. A changed file is scanned again, and the first cache build still reads the original archive.
