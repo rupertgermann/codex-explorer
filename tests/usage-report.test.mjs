@@ -195,6 +195,67 @@ test("quota activity stays correct across nonchronological cycles, touching boun
   assert.deepEqual(data.intervals, before);
 });
 
+test("quota reset tolerance is anchored to the first reset and preserves tied input provenance", () => {
+  const dims = { model: "model", effort: "high", speed: "normal" };
+  const point = (t, usedPercent, resetOffset, source, line) => ({ ...dims, sessionId: "a", t, usedPercent,
+    resetsAt: 10000 + resetOffset, limitId: "codex", windowMinutes: 300, source, line, reliable: true });
+  const snapshots = [point(1000, 10, 60, "first", 7), point(100, 20, 120, "early", 11),
+    point(1000, 12, 0, "second", 7), point(1100, 11, 60, "stale", 8),
+    point(200, 22, 61, "early-end", 12), point(1200, 14, 0, "recovered", 9), point(1300, 15, 60, "last", 10)];
+  const intervals = [{ ...dims, sessionId: "a", start: 0, end: 1500, partial: false }];
+  const before = structuredClone({ snapshots, intervals });
+  const windows = [
+    { cycle: 1, start: 1000, end: 1000, category: "same_timestamp", sessionId: null, dimensions: null,
+      startPercent: 10, endPercent: 12, observedPp: 2, firstSource: "first", firstLine: 7, lastSource: "second", lastLine: 7 },
+    { cycle: 1, start: 1000, end: 1200, category: "stale_counter", sessionId: null, dimensions: null,
+      startPercent: 12, endPercent: 14, observedPp: 2, firstSource: "second", firstLine: 7, lastSource: "recovered", lastLine: 9 },
+    { cycle: 1, start: 1200, end: 1300, category: "isolated", sessionId: "a", dimensions: dims,
+      startPercent: 14, endPercent: 15, observedPp: 1, firstSource: "recovered", firstLine: 9, lastSource: "last", lastLine: 10 },
+    { cycle: 2, start: 100, end: 200, category: "isolated", sessionId: "a", dimensions: dims,
+      startPercent: 20, endPercent: 22, observedPp: 2, firstSource: "early", firstLine: 11, lastSource: "early-end", lastLine: 12 },
+  ];
+  const result = analyzeQuota({ snapshots, intervals }, "codex/300", 1);
+  assert.deepEqual(result, { snapshots, cycles: [
+    { id: 1, start: 1000, end: 1300, reset: 10000, firstPercent: 10, highPercent: 15, stale: 1 },
+    { id: 2, start: 100, end: 200, reset: 10061, firstPercent: 20, highPercent: 22, stale: 0 },
+  ], series: [
+    { cycle: 1, points: [[1000, 90], [1000, 88]] }, { cycle: 1, points: [[1200, 86], [1300, 85]] },
+    { cycle: 2, points: [[100, 80], [200, 78]] },
+  ], windows, selected: windows.slice(2), comparison: [{ ...dims, windows: 2, sessions: 1, seconds: 200,
+    observedPp: 3, ppPerHour: 54, low: 18, high: 90 }], observedPp: 7 });
+  assert.deepEqual({ snapshots, intervals }, before);
+  assert.deepEqual(analyzeQuota({ snapshots, intervals }, "codex/300", 2).selected, []);
+});
+
+test("quota reset jitter preserves complete attribution output across excluded and selected windows", () => {
+  const dims = { model: "model", effort: "high", speed: "normal", sessionId: "a" };
+  const interval = { ...dims, start: 0, end: 1200, partial: false };
+  const snapshots = Array.from({ length: 7 }, (_, i) => ({ ...dims, t: i * 200, usedPercent: i,
+    resetsAt: 10000 + (i % 2 ? 0 : 60), limitId: "codex", windowMinutes: 300, source: `source-${i}`, line: i + 1, reliable: true }));
+  const cases = [
+    { intervals: [interval], snapshots },
+    { intervals: [], snapshots },
+    { intervals: [{ ...interval, partial: true }], snapshots },
+    { intervals: [interval, { ...interval, sessionId: "other", start: 100, end: 500 }], snapshots },
+    { intervals: [interval, { ...interval, model: "other", start: 100, end: 500 }], snapshots },
+    { intervals: [{ ...interval, end: 50 }, { ...interval, start: 100 }], snapshots },
+    { intervals: [interval], snapshots: snapshots.map((s, i) => ({ ...s, usedPercent: i === 3 ? 0 : i })) },
+    { intervals: [interval], snapshots: snapshots.map(s => ({ ...s, usedPercent: 100 })) },
+    { intervals: [interval], snapshots: snapshots.filter((_, i) => i !== 2) },
+    { intervals: [interval], snapshots: snapshots.map((s, i) => i > 2 ? { ...s, speed: "fast", sessionId: "other" } : s) },
+  ];
+  for (const data of cases) {
+    const fixedReset = data.snapshots.map(s => ({ ...s, resetsAt: 10000 }));
+    for (const minimumMinutes of [0, 10, 30]) {
+      const expected = analyzeQuota({ ...data, snapshots: fixedReset }, "codex/300", minimumMinutes);
+      const actual = analyzeQuota(data, "codex/300", minimumMinutes);
+      assert.deepEqual(actual, { ...expected, snapshots: data.snapshots });
+      assert.equal(csvText(actual.windows), csvText(expected.windows));
+      assert.equal(csvText(actual.comparison), csvText(expected.comparison));
+    }
+  }
+});
+
 const usageRecord = (t, responseId, usage, extra = {}) => record(t, "token_usage_record", { response_id: responseId, usage, ...extra });
 const compacted = (responseId, t) => t === undefined ? { type: "compacted", payload: { compaction_response_id: responseId } } : record(t, "compacted", { compaction_response_id: responseId });
 

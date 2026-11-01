@@ -131,11 +131,17 @@ export function analyzeQuota(data: UsageData, bucket: string, minimumMinutes = 1
     if (!resetGroups.length || reset - resetGroups.at(-1)![0] > 60) resetGroups.push([]);
     resetGroups.at(-1)!.push(reset);
   }
+  const rowsByReset = new Map<number, QuotaSnapshot[]>();
+  for (const resets of resetGroups) {
+    const rows: QuotaSnapshot[] = [];
+    for (const reset of resets) rowsByReset.set(reset, rows);
+  }
+  for (const snapshot of snapshots) rowsByReset.get(snapshot.resetsAt)!.push(snapshot);
   const activity = [...data.intervals].sort((a, b) => a.start - b.start);
   const cycles: { id: number; start: number; end: number; reset: number; firstPercent: number; highPercent: number; stale: number }[] = [];
   const series: QuotaSegment[] = [], windows: QuotaWindow[] = [];
   for (const resets of resetGroups) {
-    const rows = snapshots.filter(s => resets.includes(s.resetsAt)).sort((a, b) => a.t - b.t || a.sessionId.localeCompare(b.sessionId) || a.line - b.line);
+    const rows = rowsByReset.get(resets[0])!.sort((a, b) => a.t - b.t || a.sessionId.localeCompare(b.sessionId) || a.line - b.line);
     let activityIndex = 0;
     let active: ActivityInterval[] = [];
     let high = rows[0].usedPercent, previous: QuotaSnapshot | undefined, previousHigh = high, connected = false;
